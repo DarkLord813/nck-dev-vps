@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}{{username}}'s VPS — NCK Dev VPS{% endblock %}
+{% block body %}
+<div class="wrap">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;margin-bottom:20px">
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="width:48px;height:48px;border-radius:12px;background:var(--grad2);display:grid;place-items:center;font-size:22px">🖥️</div>
+      <div>
+        <h1 style="font-size:22px;margin:0">{{username}}'s VPS</h1>
+        <p class="muted" style="margin:0">
+          {% if running %}<span class="badge badge-on">● RUNNING</span> {{running_file}}{% else %}<span class="badge badge-off">○ STOPPED</span>{% endif %}
+          <span class="badge badge-subscription" style="margin-left:8px">📊 {{subscription or 'Basic'}}</span>
+          {% if is_paid %}<span class="badge badge-on" style="margin-left:4px">✅ PAID</span>{% else %}<span class="badge badge-off" style="margin-left:4px">⚠️ PENDING</span>{% endif %}
+        </p>
+      </div>
+    </div>
+    <div class="card" style="padding:10px 16px;margin:0">
+      <span class="muted" style="font-size:12px">Your Plan</span>
+      <div style="font-weight:700;color:#a5b4fc">{{subscription or 'Basic'}}</div>
+    </div>
+  </div>
+
+  <!-- Payment Required Banner -->
+  {% if not is_paid %}
+  <div class="card" style="border:2px solid #f59e0b;background:rgba(245,158,11,0.1);margin-bottom:20px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div style="font-size:28px">⚠️</div>
+      <div style="flex:1">
+        <h3 style="margin:0;color:#fbbf24">Action Required: Subscribe to a Plan</h3>
+        <p class="muted" style="margin:5px 0 0">You need to subscribe to a plan to upload files, run scripts, and install modules on NCK Dev VPS.</p>
+        {% if email %}
+          <p class="muted" style="margin:5px 0 0">Email: <strong>{{email}}</strong></p>
+        {% else %}
+          <p class="muted" style="margin:5px 0 0">⚠️ No email found. Please contact the owner to add your email.</p>
+        {% endif %}
+      </div>
+      <a href="/pricing" class="btn btn-primary">View Plans →</a>
+    </div>
+  </div>
+  {% endif %}
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+    <div>
+      <div class="card">
+        <h2>📤 Upload Files</h2>
+        <form method="post" action="/upload" enctype="multipart/form-data" class="row">
+          <input type="file" name="files" multiple required style="flex:1" {% if not is_paid %}disabled{% endif %}>
+          <button class="btn btn-primary" {% if not is_paid %}disabled{% endif %}>Upload</button>
+        </form>
+        <p class="muted" style="margin:8px 0 0">.py · .js · .sh · .html · .json · any (max 200MB)</p>
+        {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to upload files</p>{% endif %}
+      </div>
+
+      <div class="card">
+        <h2>📁 Files ({{files|length}})</h2>
+        <ul style="list-style:none;padding:0;margin:0;max-height:260px;overflow:auto">
+          {% for f in files %}
+          <li style="display:flex;justify-content:space-between;align-items:center;padding:9px 10px;border-bottom:1px solid var(--border);font-size:13px">
+            <span>📄 {{f}}</span>
+            <span class="row" style="gap:6px">
+              <a href="/file/view/{{f}}" target="_blank"><button class="btn btn-ghost btn-sm" type="button">View</button></a>
+              {% if f.endswith('.py') or f.endswith('.js') or f.endswith('.mjs') or f.endswith('.sh') %}
+              <button class="btn btn-ok btn-sm" onclick="startFile('{{f}}')" {% if not is_paid %}disabled{% endif %}>▶ Start</button>
+              {% endif %}
+              <form class="inline" method="post" action="/file/delete/{{f}}" onsubmit="return confirm('Delete {{f}}?')">
+                <button class="btn btn-danger btn-sm">×</button>
+              </form>
+            </span>
+          </li>
+          {% else %}
+          <li class="muted" style="padding:14px;text-align:center">No files yet. Upload one above.</li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>📦 Install Module</h2>
+        <form class="row" onsubmit="return doInstall(event)">
+          <input id="cmd" placeholder="pip install requests" style="flex:1" required {% if not is_paid %}disabled{% endif %}>
+          <button class="btn btn-primary" {% if not is_paid %}disabled{% endif %}>Install</button>
+        </form>
+        <p class="muted" style="margin:8px 0 8px">Allowed: <code>pip install &lt;mod&gt;</code> or <code>npm install &lt;mod&gt;</code></p>
+        <div id="installLogs" style="background:#04060d;color:#9fd3ff;font-family:'JetBrains Mono',monospace;font-size:12px;padding:12px;border-radius:10px;height:140px;overflow:auto;white-space:pre-wrap;border:1px solid var(--border)"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>⚙️ Server Controls</h2>
+        <div class="row">
+          <button class="btn btn-warn" onclick="restart()" {% if not is_paid %}disabled{% endif %}>🔄 Restart</button>
+          <button class="btn btn-danger" onclick="stop()" {% if not is_paid %}disabled{% endif %}>⏹ Stop</button>
+          <button class="btn btn-ghost" onclick="delServer()" {% if not is_paid %}disabled{% endif %}>🗑 Clear</button>
+        </div>
+        <p class="muted" style="margin-top:10px;font-size:12px">💡 Subscription: <strong>{{subscription or 'Basic'}}</strong> — 
+          {% if subscription == 'Basic' %}Python files only, no pip install{% elif subscription == 'Pro' %}Python/Node/Shell, pip/npm, 2GB RAM{% else %}All features, 4GB RAM, Dedicated help{% endif %}
+        </p>
+        {% if not is_paid %}<p class="muted" style="margin-top:10px;font-size:12px;color:#f59e0b">⚠️ Subscribe to use server controls</p>{% endif %}
+      </div>
+
+      <div class="card">
+        <h2>📜 Real-time Logs</h2>
+        <div id="logs" style="background:#04060d;color:#a6f3a6;font-family:'JetBrains Mono',monospace;font-size:12px;padding:14px;border-radius:10px;height:420px;overflow:auto;white-space:pre-wrap;border:1px solid var(--border)">Waiting for output...</div>
+      </div>
+    </div>
+  </div>
+</div>
+<style>@media(max-width:820px){.wrap>div:last-child{grid-template-columns:1fr!important}}</style>
+<script>
+async function post(url, body){
+  const r = await fetch(url,{method:'POST',body: body || new FormData()});
+  return r.json();
+}
+async function startFile(f){
+  const fd=new FormData(); fd.append('file',f);
+  const r=await post('/server/start',fd);
+  if(!r.ok) alert(r.msg);
+  setTimeout(()=>location.reload(),600);
+}
+async function restart(){ const r=await post('/server/restart'); if(!r.ok) alert(r.msg||'no file running'); }
+async function stop(){ await post('/server/stop'); }
+async function delServer(){ if(confirm('Stop and clear process?')) await post('/server/delete'); }
+async function doInstall(e){
+  e.preventDefault();
+  const fd=new FormData(); fd.append('command',document.getElementById('cmd').value);
+  const r=await post('/install',fd);
+  if(!r.ok) alert(r.msg);
+  return false;
+}
+const logBox=document.getElementById('logs'), instBox=document.getElementById('installLogs');
+async function tick(){
+  try{
+    const r=await fetch('/logs'); const j=await r.json();
+    const atBottom = logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 30;
+    logBox.textContent = j.logs.length ? j.logs.join('\n') : 'Waiting for output...';
+    if(atBottom) logBox.scrollTop = logBox.scrollHeight;
+    instBox.textContent = j.install.join('\n');
+    instBox.scrollTop = instBox.scrollHeight;
+  }catch(e){}
+}
+setInterval(tick,1200); tick();
+</script>
+{% endblock %}

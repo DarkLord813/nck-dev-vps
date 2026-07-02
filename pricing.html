@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="wrap">
+  <section style="text-align:center;padding:30px 0">
+    <h1>💎 <span class="gradient-text">Pricing</span> & Plans</h1>
+    <p class="muted">Choose a plan, subscribe, and start deploying your bots on NCK Dev VPS!</p>
+    {% if not session.username %}
+      <p class="muted" style="margin-top:10px">👉 <a href="/register" style="color:var(--primary);font-weight:600">Sign up first</a> then subscribe to a plan</p>
+    {% endif %}
+  </section>
+  
+  <!-- Currency Selector -->
+  <div style="text-align:center;margin-bottom:24px">
+    <label class="muted" style="display:block;margin-bottom:8px;font-weight:600">💱 Select Payment Currency</label>
+    <select id="currency-selector" onchange="updatePrices(this.value)" style="max-width:200px;margin:0 auto">
+      <option value="NGN">🇳🇬 NGN (₦)</option>
+      <option value="USD">🇺🇸 USD ($)</option>
+      <option value="EUR">🇪🇺 EUR (€)</option>
+      <option value="GBP">🇬🇧 GBP (£)</option>
+    </select>
+  </div>
+  
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px">
+    {% for p in pricing.plans %}
+    <div class="card" style="text-align:center;{% if loop.index == 2 %}border:1px solid rgba(99,102,241,0.5);box-shadow:0 10px 40px rgba(99,102,241,0.25){% endif %}">
+      {% if loop.index == 2 %}<div class="badge" style="background:var(--grad);color:#fff;margin-bottom:10px">⭐ POPULAR</div>{% endif %}
+      {% if loop.index == 3 %}<div class="badge" style="background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;margin-bottom:10px">🏆 BEST VALUE</div>{% endif %}
+      <h3>{{p.name}}</h3>
+      <div style="font-size:40px;font-weight:800;margin:12px 0" class="gradient-text" id="price-{{p.name}}">₦{{p.price}}</div>
+      <div class="muted" style="margin-bottom:16px">{{p.duration}}</div>
+      <div style="font-size:14px;color:#c7cce8;min-height:70px">{{p.features}}</div>
+      
+      {% if session.username %}
+        {% set user_info = users.get(session.username) if users else None %}
+        <button class="btn btn-primary" style="margin-top:14px;width:100%;justify-content:center" 
+                onclick="payWithFlutterwave('{{session.username}}', '{{p.name}}', '{{user_info.email if user_info else ''}}', document.getElementById('currency-selector').value)">
+          💳 Subscribe Now
+        </button>
+      {% else %}
+        <a href="/register" class="btn btn-primary" style="margin-top:14px;width:100%;justify-content:center">
+          Sign Up First
+        </a>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  
+  {% if pricing.contact %}
+  <div class="card" style="margin-top:24px;text-align:center">
+    <h3>💬 Need Help?</h3>
+    <p class="muted">Contact the owner for support or custom plans:</p>
+    <p style="font-size:18px;font-weight:600">{{pricing.contact}}</p>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+// Multi-currency pricing data
+const currencyPrices = {
+    "NGN": {"Basic": "2500", "Pro": "15000", "Premium": "25000"},
+    "USD": {"Basic": "3.00", "Pro": "18.00", "Premium": "30.00"},
+    "EUR": {"Basic": "2.80", "Pro": "16.50", "Premium": "28.00"},
+    "GBP": {"Basic": "2.40", "Pro": "14.50", "Premium": "24.00"}
+};
+
+const currencySymbols = {
+    "NGN": "₦",
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£"
+};
+
+function updatePrices(currency) {
+    const symbol = currencySymbols[currency] || "₦";
+    const prices = currencyPrices[currency] || currencyPrices["NGN"];
+    
+    document.getElementById("price-Basic").textContent = `${symbol}${prices["Basic"]}`;
+    document.getElementById("price-Pro").textContent = `${symbol}${prices["Pro"]}`;
+    document.getElementById("price-Premium").textContent = `${symbol}${prices["Premium"]}`;
+}
+
+async function payWithFlutterwave(username, planName, email, currency) {
+    if (!email) {
+        alert('Please add your email in your profile or contact support.');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/initialize-payment', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                username: username,
+                plan_name: planName,
+                email: email,
+                currency: currency || 'NGN'
+            }),
+        });
+        
+        const result = await response.json();
+        
+        if (result.error) {
+            alert('Error: ' + result.error);
+            return;
+        }
+        
+        if (result.status) {
+            // Redirect to Flutterwave payment page
+            window.location.href = result.link;
+        }
+    } catch (error) {
+        alert('Payment error: ' + error.message);
+    }
+}
+</script>
+{% endblock %}

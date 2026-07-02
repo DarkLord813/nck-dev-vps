@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Owner Dashboard — NCK Dev VPS{% endblock %}
+{% block body %}
+<div class="wrap">
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px">
+    <div style="width:48px;height:48px;border-radius:12px;background:var(--grad);display:grid;place-items:center;font-size:22px">👑</div>
+    <div>
+      <h1 style="font-size:24px;margin:0">Owner Console</h1>
+      <p class="muted" style="margin:0">Manage users, subscriptions & pricing for NCK Dev VPS</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>➕ Create User</h2>
+    <form method="post" action="/owner/create" class="row">
+      <input name="username" placeholder="Username" required>
+      <input name="email" type="email" placeholder="Email" required>
+      <input name="password" placeholder="Password" required>
+      <select name="subscription" style="max-width:140px">
+        <option value="Basic">Basic (₦2,500/mo)</option>
+        <option value="Pro" selected>Pro (₦15,000/yr)</option>
+        <option value="Premium">Premium (₦25,000/yr)</option>
+      </select>
+      <button class="btn btn-primary">Create User</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>👥 Registered Users ({{users|length}})</h2>
+    {% if not users %}<p class="muted">No users yet. Create one above or users can self-register.</p>{% endif %}
+    {% if users %}
+    <div style="overflow-x:auto">
+    <table>
+      <tr><th>User</th><th>Email</th><th>Subscription</th><th>Status</th><th>Created</th><th>Auto-login Link</th><th>Actions</th></tr>
+      {% for name, u in users.items() %}
+      <tr>
+        <td><b>{{name}}</b></td>
+        <td>{{u.email or 'N/A'}}</td>
+        <td><span class="badge badge-subscription">{{u.subscription or 'Basic'}}</span></td>
+        <td>{% if u.payment_status == 'paid' %}<span class="badge badge-on">✅ Paid</span>{% else %}<span class="badge badge-off">⏳ Pending</span>{% endif %}</td>
+        <td class="muted" style="font-size:12px">{{ (u.created_at or 0)|int|string|truncate(20) }}</td>
+        <td><a href="{{base_url}}/auto/{{u.token}}" target="_blank" style="font-size:11px;word-break:break-all">{{base_url}}/auto/{{u.token}}</a></td>
+        <td>
+          <form class="inline" method="post" action="/owner/update_subscription/{{name}}">
+            <select name="subscription" style="padding:4px 8px;font-size:11px;width:100px">
+              <option value="Basic" {% if u.subscription == 'Basic' %}selected{% endif %}>Basic</option>
+              <option value="Pro" {% if u.subscription == 'Pro' %}selected{% endif %}>Pro</option>
+              <option value="Premium" {% if u.subscription == 'Premium' %}selected{% endif %}>Premium</option>
+            </select>
+            <button class="btn btn-ok btn-sm">Update</button>
+          </form>
+          <form class="inline" method="post" action="/owner/delete/{{name}}" onsubmit="return confirm('Delete {{name}}? This will remove all their files!')">
+            <button class="btn btn-danger btn-sm">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ==================== BACKUP PANEL ==================== -->
+  <div class="card" id="backup">
+    <h2>💾 Versioned GitHub Backup System</h2>
+    <p class="muted">
+      🚀 <b>Auto-Backup:</b> Every user registration, payment, file upload, or data change is automatically backed up.<br>
+      🔄 <b>Auto-Restore:</b> On every service restart, data is automatically restored from GitHub.<br>
+      📋 <b>Versioned:</b> Keeps last 10 versions (<code>database.json</code>, <code>database(1).json</code>, etc.)
+    </p>
+    
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+      <form method="post" action="/admin/backup" style="display:inline">
+        <button class="btn btn-primary">💾 Backup Now</button>
+      </form>
+      <form method="post" action="/admin/restore" style="display:inline" 
+            onsubmit="return confirm('⚠️ Restore will REPLACE ALL current data with latest GitHub backup. Continue?')">
+        <button class="btn btn-warn">🔄 Restore Latest</button>
+      </form>
+      <form method="post" action="/admin/force-restore" style="display:inline" 
+            onsubmit="return confirm('⚠️ FORCE RESTORE will REPLACE ALL current data even if local data exists. Continue?')">
+        <button class="btn btn-danger">🔴 Force Restore</button>
+      </form>
+      <button class="btn btn-ghost" onclick="checkBackupStatus()">📊 Check Status</button>
+    </div>
+    
+    <div id="backup-status-display" style="background:rgba(10,14,32,0.5);border-radius:10px;padding:14px;border:1px solid var(--border)">
+      <p class="muted" style="margin:0">Click "Check Status" to see backup information.</p>
+    </div>
+  </div>
+  <!-- ==================== END BACKUP PANEL ==================== -->
+
+  <div class="card" id="pricing">
+    <h2>💰 Pricing Plans Editor</h2>
+    <p class="muted">These plans appear on the public Home & Pricing pages.</p>
+    <form method="post" action="/owner/pricing">
+      <div class="row" style="margin-bottom:14px">
+        <label style="display:flex;flex-direction:column;gap:4px"><span class="muted">Currency</span>
+          <input name="currency" value="{{pricing.currency}}" style="width:80px"></label>
+        <label style="flex:1;display:flex;flex-direction:column;gap:4px"><span class="muted">Contact (where users buy)</span>
+          <input name="contact" value="{{pricing.contact}}" placeholder="Telegram / WhatsApp / Email"></label>
+      </div>
+      <div id="plans">
+      {% for p in pricing.plans %}
+        <div class="row" style="margin-bottom:8px;padding:10px;background:rgba(10,14,32,0.5);border-radius:10px;border:1px solid var(--border)">
+          <input name="p_name" value="{{p.name}}" placeholder="Plan name" style="max-width:140px">
+          <input name="p_duration" value="{{p.duration}}" placeholder="Duration" style="max-width:130px">
+          <input name="p_price" value="{{p.price}}" placeholder="Price" style="max-width:90px">
+          <input name="p_features" value="{{p.features}}" placeholder="Features">
+          <button type="button" class="btn btn-danger btn-sm" onclick="this.parentNode.remove()">×</button>
+        </div>
+      {% endfor %}
+      </div>
+      <div style="margin-top:12px;display:flex;gap:10px">
+        <button type="button" class="btn btn-ghost" onclick="addPlan()">+ Add Plan</button>
+        <button class="btn btn-primary">💾 Save Pricing</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+// ==================== ADD PLAN ====================
+function addPlan() {
+  const d = document.createElement('div');
+  d.className = 'row';
+  d.style.cssText = 'margin-bottom:8px;padding:10px;background:rgba(10,14,32,0.5);border-radius:10px;border:1px solid var(--border)';
+  d.innerHTML = `<input name="p_name" placeholder="Plan name" style="max-width:140px">
+    <input name="p_duration" placeholder="Duration" style="max-width:130px">
+    <input name="p_price" placeholder="Price" style="max-width:90px">
+    <input name="p_features" placeholder="Features">
+    <button type="button" class="btn btn-danger btn-sm" onclick="this.parentNode.remove()">×</button>`;
+  document.getElementById('plans').appendChild(d);
+}
+
+// ==================== BACKUP FUNCTIONS ====================
+async function checkBackupStatus() {
+    const statusDiv = document.getElementById('backup-status-display');
+    statusDiv.innerHTML = '<p class="muted">Checking backup status...</p>';
+    
+    try {
+        const response = await fetch('/admin/backup-status');
+        const data = await response.json();
+        
+        if (data.enabled) {
+            let statusHtml = `<p style="color:#6ee7b7">✅ GitHub backup is ACTIVE!</p>`;
+            statusHtml += `<p class="muted">📦 Data exists: ${data.has_data ? '✅ Yes' : '❌ No'}</p>`;
+            statusHtml += `<p class="muted">🔢 Total backups performed: <strong>${data.backup_count || 0}</strong></p>`;
+            
+            if (data.last_backup && data.last_backup !== 'Never') {
+                statusHtml += `<p class="muted">📅 Last backup: <strong>${new Date(data.last_backup).toLocaleString()}</strong></p>`;
+            }
+            
+            // Show backup files
+            if (data.backup_files && data.backup_files.length > 0) {
+                statusHtml += `<p class="muted" style="margin-top:10px"><b>📋 Backup Versions on GitHub:</b></p>`;
+                statusHtml += `<div style="max-height:150px;overflow-y:auto;font-size:12px;">`;
+                for (const file of data.backup_files) {
+                    const sizeKB = (file.size / 1024).toFixed(1);
+                    const isLatest = file.version === 0 ? '⭐' : '';
+                    statusHtml += `<p style="margin:2px 0;padding:2px 8px;background:rgba(10,14,32,0.3);border-radius:4px;">
+                        ${isLatest} <code>${file.name}</code> - ${sizeKB} KB
+                        ${file.version > 0 ? `<button class="btn btn-ghost btn-sm" onclick="restoreVersion(${file.version})" style="margin-left:8px;font-size:10px;">Restore</button>` : ''}
+                    </p>`;
+                }
+                statusHtml += `</div>`;
+            }
+            
+            statusHtml += `<p class="muted" style="font-size:11px;margin-top:8px">
+                📁 Repository: ${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}<br>
+                🔄 Auto-restore: Enabled on every service restart<br>
+                📋 Versions kept: Last 10
+            </p>`;
+            
+            statusDiv.innerHTML = statusHtml;
+        } else {
+            statusDiv.innerHTML = `
+                <p style="color:#fca5a5">❌ GitHub backup is not configured.</p>
+                <p class="muted">Set these environment variables:</p>
+                <ul style="color:var(--muted);font-size:13px;margin:5px 0">
+                    <li><code>GITHUB_TOKEN</code> - Your GitHub Personal Access Token</li>
+                    <li><code>GITHUB_REPO_OWNER</code> - GitHub username</li>
+                    <li><code>GITHUB_REPO_NAME</code> - Repository name</li>
+                    <li><code>GITHUB_BACKUP_PATH</code> - e.g., <code>backups/database.json</code></li>
+                </ul>
+            `;
+        }
+    } catch (error) {
+        statusDiv.innerHTML = `<p style="color:#fca5a5">Error checking backup status: ${error.message}</p>`;
+    }
+}
+
+async function restoreVersion(version) {
+    if (confirm(`⚠️ Restore version ${version}? This will REPLACE ALL current data!`)) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = `/admin/restore-version/${version}`;
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+
+// Auto-check on page load
+document.addEventListener('DOMContentLoaded', function() {
+    checkBackupStatus();
+});
+</script>
+{% endblock %}

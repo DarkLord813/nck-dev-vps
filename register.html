@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Sign Up — NCK Dev VPS{% endblock %}
+{% block body %}
+<div style="display:flex;align-items:center;justify-content:center;padding:40px 20px;min-height:calc(100vh - 200px)">
+  <form class="card" method="post" style="width:420px">
+    <div style="text-align:center;margin-bottom:18px">
+      <div style="width:56px;height:56px;border-radius:14px;background:var(--grad);display:inline-grid;place-items:center;font-size:26px;box-shadow:0 10px 30px rgba(99,102,241,0.45)">🚀</div>
+      <h2 style="margin-top:14px">Create Your Account</h2>
+      <p class="muted" style="margin:0">Choose a plan and start deploying on NCK Dev VPS</p>
+    </div>
+
+    <input name="username" placeholder="Username (min 3 characters)" autofocus required style="width:100%;margin-bottom:10px">
+    <input name="email" type="email" placeholder="Email (required for payment)" required style="width:100%;margin-bottom:10px">
+    <input name="password" type="password" placeholder="Password (min 6 characters)" required style="width:100%;margin-bottom:10px">
+    <input name="confirm_password" type="password" placeholder="Confirm Password" required style="width:100%;margin-bottom:14px">
+
+    <div style="margin-bottom:14px">
+      <label class="muted" style="display:block;margin-bottom:6px;font-size:13px;font-weight:600">Select Your Plan</label>
+      <select name="subscription" style="width:100%">
+        <option value="Basic">Basic - ₦2,500/month (Python only, 1GB RAM)</option>
+        <option value="Pro" selected>Pro - ₦15,000/year (Python/Node/Shell, pip/npm, 2GB RAM)</option>
+        <option value="Premium">Premium - ₦25,000/year (All features, 4GB RAM, Best value!)</option>
+      </select>
+      <p class="muted" style="font-size:11px;margin-top:6px">💡 Contact owner to purchase: {{pricing.contact}}</p>
+    </div>
+
+    <button class="btn btn-primary" style="width:100%;justify-content:center">Create Account →</button>
+
+    <p class="muted" style="text-align:center;margin:14px 0 0;font-size:12px">
+      Already have an account? <a href="/login" style="color:var(--primary);font-weight:600">Login</a>
+    </p>
+  </form>
+</div>
+{% endblock %}
