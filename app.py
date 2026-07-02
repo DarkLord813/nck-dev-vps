@@ -1,8 +1,3 @@
-"""
-NCK Dev VPS Panel - Deployable on Choreo
-Owner: DarkLord813 / DarkLord813_codex
-with Flutterwave Multi-Currency Payment Integration & Versioned GitHub Backup
-"""
 import os, json, time, uuid, shutil, subprocess, threading, signal, secrets
 import requests
 from collections import deque

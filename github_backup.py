@@ -1,7 +1,3 @@
-"""
-GitHub Backup & Restore Module for NCK Dev VPS
-VERSIONED BACKUPS - Creates database.json, database(1).json, database(2).json, etc.
-"""
 import os
 import json
 import time
