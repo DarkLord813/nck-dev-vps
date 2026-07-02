@@ -59,6 +59,7 @@ A lightweight web-based VPS-like panel — deployable on Choreo. The owner creat
 | `SECRET_KEY` | Flask session encryption key | Yes |
 | `FLW_PUBLIC_KEY` | Flutterwave public key | Yes |
 | `FLW_SECRET_KEY` | Flutterwave secret key | Yes |
+| `FLW_ENCRYPTION_KEY` | Flutterwave encryption key | Yes |
 | `GITHUB_TOKEN` | GitHub Personal Access Token | Recommended |
 | `GITHUB_REPO_OWNER` | GitHub username (e.g., DarkLord813) | Recommended |
 | `GITHUB_REPO_NAME` | **Backup repository name** (e.g., `nck-vps-backup`) | Recommended |
