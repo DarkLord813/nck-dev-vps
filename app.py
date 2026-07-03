@@ -46,20 +46,20 @@ DEFAULT_PRICING = {
     "contact": "Telegram: @rexoronsaye",
     "plans": [
         {
-            "name": "Basic", 
-            "duration": "Monthly", 
+            "name": "Basic",
+            "duration": "Monthly",
             "price": "2500",
             "features": "Python only, 1GB RAM, Basic support"
         },
         {
-            "name": "Pro", 
-            "duration": "Yearly", 
+            "name": "Pro",
+            "duration": "Yearly",
             "price": "15000",
             "features": "Python/Node/Shell, pip/npm, 2GB RAM, Priority support"
         },
         {
-            "name": "Premium", 
-            "duration": "Yearly", 
+            "name": "Premium",
+            "duration": "Yearly",
             "price": "25000",
             "features": "All features, 4GB RAM, Dedicated help, Best value!"
         },
@@ -76,42 +76,47 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
-# ==================== GITHUB CONFIG CHECK ====================
-# This ensures GitHub variables are loaded from environment
-# DO NOT HARDCODE TOKENS HERE!
+# ---------- GitHub Backup Integration ----------
+print("=" * 60)
+print("INITIALIZING NCK DEV VPS WITH VERSIONED GITHUB BACKUP")
+print("=" * 60)
+
+# Get GitHub configuration from environment
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO_OWNER = os.environ.get("GITHUB_REPO_OWNER", "")
 GITHUB_REPO_NAME = os.environ.get("GITHUB_REPO_NAME", "")
 GITHUB_BACKUP_BRANCH = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
 GITHUB_BACKUP_PATH = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
 
-# Check if GitHub is configured
-if not GITHUB_TOKEN:
-    print("⚠️ WARNING: GITHUB_TOKEN is not set! Backup will not work.")
-if not GITHUB_REPO_OWNER or GITHUB_REPO_OWNER == "your-username":
-    print("⚠️ WARNING: GITHUB_REPO_OWNER is not set! Backup will not work.")
-if not GITHUB_REPO_NAME or GITHUB_REPO_NAME == "your-repo":
-    print("⚠️ WARNING: GITHUB_REPO_NAME is not set! Backup will not work.")
-# ==================== END GITHUB CONFIG CHECK ====================
-
-# ---------- GitHub Backup Integration ----------
-print("=" * 60)
-print("🔄 INITIALIZING NCK DEV VPS WITH VERSIONED GITHUB BACKUP")
-print("=" * 60)
+print(f"GitHub Config from environment:")
+print(f"  GITHUB_TOKEN: {'SET' if GITHUB_TOKEN else 'MISSING'}")
+print(f"  GITHUB_REPO_OWNER: {GITHUB_REPO_OWNER or 'MISSING'}")
+print(f"  GITHUB_REPO_NAME: {GITHUB_REPO_NAME or 'MISSING'}")
 
 try:
     from github_backup import (
-        init_github_backup_force, 
-        manual_backup, 
-        get_backup_status, 
+        configure_github,
+        init_github_backup_force,
+        manual_backup,
+        get_backup_status,
         has_data,
         force_restore,
         github_backup
     )
-    print("✅ GitHub backup module loaded successfully")
+    print("GitHub backup module loaded successfully")
+
+    # Configure GitHub with environment values
+    configure_github(
+        token=GITHUB_TOKEN,
+        repo_owner=GITHUB_REPO_OWNER,
+        repo_name=GITHUB_REPO_NAME,
+        branch=GITHUB_BACKUP_BRANCH,
+        backup_path=GITHUB_BACKUP_PATH
+    )
+
 except ImportError as e:
-    print(f"⚠️ GitHub backup module not found: {e}")
-    # Create dummy functions if module not found
+    print(f"GitHub backup module not found: {e}")
+    def configure_github(*args, **kwargs): pass
     def init_github_backup_force(*args, **kwargs): return None
     def manual_backup(*args, **kwargs): return False
     def get_backup_status(*args, **kwargs): return {"enabled": False}
@@ -120,17 +125,16 @@ except ImportError as e:
     github_backup = None
 
 # Initialize GitHub backup system with FORCE RESTORE on startup
-print("🔄 Initializing GitHub backup system with FORCE RESTORE...")
+print("Initializing GitHub backup system with FORCE RESTORE...")
 backup_system = init_github_backup_force(DATA_DIR, FILES_ROOT)
 
-# Check if restore was successful
 if backup_system:
     if hasattr(backup_system, '_restore_success') and backup_system._restore_success:
-        print("✅ RESTORE SUCCESSFUL! Data restored from GitHub on startup")
+        print("RESTORE SUCCESSFUL! Data restored from GitHub on startup")
     else:
-        print("ℹ️ No backup found or restore failed - starting fresh")
+        print("No backup found or restore failed - starting fresh")
 else:
-    print("⚠️ GitHub backup system not fully initialized")
+    print("GitHub backup system not fully initialized")
 
 print("=" * 60)
 
@@ -195,17 +199,17 @@ def start_process(username, filename):
     if not fpath.exists():
         return False, "File not found"
     ext = fpath.suffix.lower()
-    
+
     users = load_users()
     user_data = users.get(username, {})
     subscription = user_data.get("subscription", "Basic")
-    
+
     if user_data.get("payment_status") != "paid":
         return False, "Please subscribe to a plan to run files"
-    
+
     if subscription == "Basic" and ext not in [".py"]:
         return False, "Basic plan only supports Python files"
-    
+
     if ext == ".py":
         cmd = ["python", "-u", str(fpath)]
     elif ext in (".js", ".mjs", ".cjs"):
@@ -214,13 +218,13 @@ def start_process(username, filename):
         cmd = ["bash", str(fpath)]
     else:
         return False, f"Unsupported file type: {ext}"
-    
+
     memory_limit = {
         "Basic": "1g",
         "Pro": "2g",
         "Premium": "4g"
     }.get(subscription, "1g")
-    
+
     try:
         proc = subprocess.Popen(
             cmd, cwd=str(udir),
@@ -272,24 +276,24 @@ def run_install(username, command):
     users = load_users()
     user_data = users.get(username, {})
     subscription = user_data.get("subscription", "Basic")
-    
+
     if user_data.get("payment_status") != "paid":
         return False, "Please subscribe to a plan to install modules"
-    
+
     parts = command.strip().split()
     if not parts:
         return False, "empty command"
-    
+
     if subscription == "Basic" and parts[0] in ["pip", "pip3"]:
         return False, "Basic plan doesn't support pip install. Upgrade to Pro or Premium."
-    
+
     if parts[0] not in ("pip", "pip3", "npm"):
         return False, "Only 'pip install <pkg>' or 'npm install <pkg>' allowed"
     if len(parts) < 3 or parts[1] != "install":
         return False, "Format: pip install <module>  OR  npm install <module>"
     if any(c in command for c in [";", "&", "|", "`", "$(", ">"]):
         return False, "Invalid characters"
-    
+
     logs = INSTALL_LOGS.setdefault(username, deque(maxlen=1000))
     logs.append(f"[install] $ {command}")
     cwd = str(user_dir(username))
@@ -352,18 +356,18 @@ def index():
 
 @app.route("/home")
 def landing():
-    return render_template("landing.html", 
-        pricing=load_pricing(), 
-        flw_key=FLW_PUBLIC_KEY, 
+    return render_template("landing.html",
+        pricing=load_pricing(),
+        flw_key=FLW_PUBLIC_KEY,
         flw_enabled=FLW_ENABLED,
         currencies=SUPPORTED_CURRENCIES
     )
 
 @app.route("/pricing")
 def pricing_page():
-    return render_template("pricing.html", 
-        pricing=load_pricing(), 
-        flw_key=FLW_PUBLIC_KEY, 
+    return render_template("pricing.html",
+        pricing=load_pricing(),
+        flw_key=FLW_PUBLIC_KEY,
         flw_enabled=FLW_ENABLED,
         currencies=SUPPORTED_CURRENCIES
     )
@@ -376,32 +380,32 @@ def register():
         confirm_password = request.form.get("confirm_password", "")
         subscription = request.form.get("subscription", "Basic")
         email = request.form.get("email", "").strip()
-        
+
         if not username or not password:
             flash("Username and password are required!", "error")
             return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
-        
+
         if len(username) < 3:
             flash("Username must be at least 3 characters!", "error")
             return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
-        
+
         if password != confirm_password:
             flash("Passwords don't match!", "error")
             return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
-        
+
         if len(password) < 6:
             flash("Password must be at least 6 characters!", "error")
             return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
-        
+
         users = load_users()
         if username in users:
             flash("Username already exists! Please choose another.", "error")
             return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
-        
+
         if username == OWNER_USER:
             flash("This username is reserved!", "error")
             return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
-        
+
         users[username] = {
             "password": generate_password_hash(password),
             "created_at": time.time(),
@@ -412,10 +416,10 @@ def register():
         }
         save_users(users)
         user_dir(username)
-        
+
         flash("Account created successfully! Please subscribe to a plan to start deploying.", "success")
         return redirect(url_for("pricing_page"))
-    
+
     return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
 
 @app.route("/login", methods=["GET", "POST"])
@@ -424,13 +428,13 @@ def login():
     if request.method == "POST":
         u = request.form.get("username", "").strip()
         p = request.form.get("password", "")
-        
+
         if u == OWNER_USER and p == OWNER_PASS:
             session.clear()
             session["role"] = "owner"
             session["username"] = u
             return redirect(url_for("owner_dashboard"))
-        
+
         users = load_users()
         info = users.get(u)
         if info and check_password_hash(info["password"], p):
@@ -470,49 +474,49 @@ def auto_login(token):
 def initialize_payment():
     if not FLW_ENABLED:
         return jsonify({"error": "Flutterwave is not configured. Please set FLW_PUBLIC_KEY, FLW_SECRET_KEY and FLW_ENCRYPTION_KEY."}), 400
-    
+
     try:
         data = request.json
         username = data.get("username")
         plan_name = data.get("plan_name")
         email = data.get("email")
         currency = data.get("currency", "NGN")
-        
+
         if not email:
             return jsonify({"error": "Email is required for payment"}), 400
-        
+
         if currency not in SUPPORTED_CURRENCIES:
             return jsonify({"error": f"Currency {currency} is not supported. Supported: {', '.join(SUPPORTED_CURRENCIES.keys())}"}), 400
-        
+
         pricing = load_pricing()
-        
+
         plan = None
         for p in pricing["plans"]:
             if p["name"] == plan_name:
                 plan = p
                 break
-        
+
         if not plan:
             return jsonify({"error": "Plan not found"}), 400
-        
+
         currency_pricing = pricing.get("currency_pricing", {})
         if currency in currency_pricing and plan_name in currency_pricing[currency]:
             amount = currency_pricing[currency][plan_name]
         else:
             amount = plan["price"]
-        
+
         amount = float(amount)
-        
+
         tx_ref = f"VPS-{username}-{secrets.token_hex(8)}"
-        
+
         headers = {
             "Authorization": f"Bearer {FLW_SECRET_KEY}",
             "Content-Type": "application/json"
         }
-        
+
         if FLW_ENCRYPTION_KEY:
             headers["Encryption-Key"] = FLW_ENCRYPTION_KEY
-        
+
         payload = {
             "tx_ref": tx_ref,
             "amount": amount,
@@ -533,10 +537,10 @@ def initialize_payment():
                 "currency": currency
             }
         }
-        
+
         response = requests.post(FLW_INITIALIZE_URL, json=payload, headers=headers)
         result = response.json()
-        
+
         if result["status"] == "success":
             return jsonify({
                 "status": True,
@@ -547,36 +551,36 @@ def initialize_payment():
             })
         else:
             return jsonify({"error": result.get("message", "Payment initialization failed")}), 400
-            
+
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
 @app.route("/payment-verify")
 def payment_verify():
     tx_ref = request.args.get("tx_ref")
-    
+
     if not tx_ref:
         flash("No transaction reference found!", "error")
         return redirect(url_for("pricing_page"))
-    
+
     try:
         headers = {
             "Authorization": f"Bearer {FLW_SECRET_KEY}",
             "Content-Type": "application/json"
         }
-        
+
         if FLW_ENCRYPTION_KEY:
             headers["Encryption-Key"] = FLW_ENCRYPTION_KEY
-        
+
         response = requests.get(f"{FLW_VERIFY_URL}{tx_ref}/verify", headers=headers)
         result = response.json()
-        
+
         if result["status"] == "success" and result["data"]["status"] == "successful":
             metadata = result["data"]["meta"]
             username = metadata.get("username")
             plan = metadata.get("plan")
             currency = metadata.get("currency", "NGN")
-            
+
             users = load_users()
             if username in users:
                 users[username]["payment_status"] = "paid"
@@ -590,10 +594,10 @@ def payment_verify():
                 flash("User not found!", "error")
         else:
             flash("Payment verification failed. Please contact support.", "error")
-            
+
     except Exception as e:
         flash(f"Error verifying payment: {str(e)}", "error")
-    
+
     return redirect(url_for("login"))
 
 @app.route("/payment-cancel")
@@ -608,12 +612,12 @@ def admin_backup():
     def do_backup():
         success = manual_backup("Manual backup triggered by admin")
         if success:
-            flash("✅ Versioned backup completed successfully!", "success")
+            flash("Versioned backup completed successfully!", "success")
         else:
-            flash("⚠️ Backup skipped (no data changes or safety check blocked)", "warning")
-    
+            flash("Backup skipped (no data changes or safety check blocked)", "warning")
+
     threading.Thread(target=do_backup, daemon=True).start()
-    flash("📤 Versioned backup started in background!", "success")
+    flash("Versioned backup started in background!", "success")
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/admin/backup-status")
@@ -627,44 +631,44 @@ def admin_backup_status():
 @require_owner
 def admin_restore():
     if not github_backup or not github_backup.is_enabled:
-        flash("❌ GitHub backup not configured!", "error")
+        flash("GitHub backup not configured!", "error")
         return redirect(url_for("owner_dashboard"))
-    
+
     success = force_restore()
     if success:
-        flash("✅ Restore successful! Data reloaded from GitHub.", "success")
+        flash("Restore successful! Data reloaded from GitHub.", "success")
     else:
-        flash("❌ Restore failed. No backup found or empty backup.", "error")
+        flash("Restore failed. No backup found or empty backup.", "error")
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/admin/force-restore", methods=["POST"])
 @require_owner
 def admin_force_restore():
     if not github_backup or not github_backup.is_enabled:
-        flash("❌ GitHub backup not configured!", "error")
+        flash("GitHub backup not configured!", "error")
         return redirect(url_for("owner_dashboard"))
-    
+
     manual_backup("Pre-restore backup")
-    
+
     success = force_restore()
     if success:
-        flash("✅ Force restore successful! Data reloaded from GitHub.", "success")
+        flash("Force restore successful! Data reloaded from GitHub.", "success")
     else:
-        flash("❌ Force restore failed.", "error")
+        flash("Force restore failed.", "error")
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/admin/restore-version/<int:version>", methods=["POST"])
 @require_owner
 def admin_restore_version(version):
     if not github_backup or not github_backup.is_enabled:
-        flash("❌ GitHub backup not configured!", "error")
+        flash("GitHub backup not configured!", "error")
         return redirect(url_for("owner_dashboard"))
-    
+
     success = force_restore(version)
     if success:
-        flash(f"✅ Restored version {version} successfully!", "success")
+        flash(f"Restored version {version} successfully!", "success")
     else:
-        flash(f"❌ Failed to restore version {version}.", "error")
+        flash(f"Failed to restore version {version}.", "error")
     return redirect(url_for("owner_dashboard"))
 
 # ---------- owner routes ----------
@@ -674,13 +678,13 @@ def owner_dashboard():
     users = load_users()
     now = time.time()
     base = request.host_url.rstrip("/")
-    
+
     backup_info = get_backup_status()
-    
-    return render_template("owner.html", 
-        users=users, 
-        now=now, 
-        base_url=base, 
+
+    return render_template("owner.html",
+        users=users,
+        now=now,
+        base_url=base,
         pricing=load_pricing(),
         currencies=SUPPORTED_CURRENCIES,
         backup_info=backup_info
@@ -693,17 +697,17 @@ def owner_create():
     p = request.form.get("password", "").strip()
     subscription = request.form.get("subscription", "Basic")
     email = request.form.get("email", "").strip()
-    
+
     if not u or not p:
         return redirect(url_for("owner_dashboard"))
     if u == OWNER_USER:
         return redirect(url_for("owner_dashboard"))
-    
+
     users = load_users()
     if u in users:
         flash("User already exists!", "error")
         return redirect(url_for("owner_dashboard"))
-    
+
     users[u] = {
         "password": generate_password_hash(p),
         "created_at": time.time(),
@@ -754,7 +758,7 @@ def owner_pricing():
     durs = request.form.getlist("p_duration")
     prices = request.form.getlist("p_price")
     feats = request.form.getlist("p_features")
-    
+
     for i in range(len(names)):
         if not names[i].strip():
             continue
@@ -778,9 +782,9 @@ def user_dashboard():
     info = users.get(u, {})
     udir = user_dir(u)
     files = sorted([f.name for f in udir.iterdir() if f.is_file()])
-    
+
     is_paid = info.get("payment_status") == "paid"
-    
+
     return render_template("user.html",
         username=u, info=info, files=files,
         running=is_running(u),
@@ -798,7 +802,7 @@ def upload():
     if users.get(u, {}).get("payment_status") != "paid":
         flash("Please subscribe to a plan to upload files!", "error")
         return redirect(url_for("pricing_page"))
-    
+
     udir = user_dir(u)
     files = request.files.getlist("files")
     for f in files:

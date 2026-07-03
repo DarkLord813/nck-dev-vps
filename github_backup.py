@@ -7,25 +7,29 @@ import threading
 import requests
 from pathlib import Path
 from datetime import datetime
-from collections import Counter
 
-# ==================== GITHUB ENV CHECK ====================
-# These must be set in Render environment variables
-# DO NOT HARDCODE TOKENS HERE!
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPO_OWNER = os.environ.get("GITHUB_REPO_OWNER", "")
-GITHUB_REPO_NAME = os.environ.get("GITHUB_REPO_NAME", "")
-GITHUB_BACKUP_BRANCH = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
-GITHUB_BACKUP_PATH = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
-GITHUB_BACKUP_DIR = os.path.dirname(GITHUB_BACKUP_PATH)
+# ==================== GITHUB CONFIGURATION ====================
+# This will be set by app.py
+GITHUB_TOKEN = ""
+GITHUB_REPO_OWNER = ""
+GITHUB_REPO_NAME = ""
+GITHUB_BACKUP_BRANCH = "main"
+GITHUB_BACKUP_PATH = "backups/database.json"
+GITHUB_BACKUP_DIR = "backups"
+# ==================== END GITHUB CONFIGURATION ====================
 
-if not GITHUB_TOKEN:
-    print("❌ ERROR: GITHUB_TOKEN is not set in environment variables!")
-if not GITHUB_REPO_OWNER or GITHUB_REPO_OWNER == "your-username":
-    print("❌ ERROR: GITHUB_REPO_OWNER is not set in environment variables!")
-if not GITHUB_REPO_NAME or GITHUB_REPO_NAME == "your-repo":
-    print("❌ ERROR: GITHUB_REPO_NAME is not set in environment variables!")
-# ==================== END GITHUB ENV CHECK ====================
+def configure_github(token, repo_owner, repo_name, branch="main", backup_path="backups/database.json"):
+    """Configure GitHub backup settings from app.py"""
+    global GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME, GITHUB_BACKUP_BRANCH, GITHUB_BACKUP_PATH, GITHUB_BACKUP_DIR
+    
+    GITHUB_TOKEN = token
+    GITHUB_REPO_OWNER = repo_owner
+    GITHUB_REPO_NAME = repo_name
+    GITHUB_BACKUP_BRANCH = branch
+    GITHUB_BACKUP_PATH = backup_path
+    GITHUB_BACKUP_DIR = os.path.dirname(backup_path)
+    
+    print(f"GitHub configured: {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
 
 # Max number of versioned backups to keep
 MAX_BACKUP_VERSIONS = 10
@@ -59,12 +63,11 @@ class GitHubBackupSystem:
         self.backup_extension = os.path.splitext(self.backup_filename)[1]
         
         if self.is_enabled:
-            print(f"✅ GitHub Backup enabled: {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
-            print(f"📁 Backup path: {GITHUB_BACKUP_PATH}")
-            print(f"📋 Versioned backups: {self.backup_basename}(1){self.backup_extension}, etc.")
-            print(f"🛡️ Smart Backup: Only backups if local has MORE data than GitHub")
+            print(f"GitHub Backup enabled: {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
+            print(f"Backup path: {GITHUB_BACKUP_PATH}")
+            print(f"Versioned backups: {self.backup_basename}(1){self.backup_extension}, etc.")
         else:
-            print("⚠️ GitHub Backup disabled — data will be lost on restart")
+            print("GitHub Backup disabled — data will be lost on restart")
     
     def _check_config(self):
         """Check if GitHub backup is properly configured"""
@@ -75,7 +78,7 @@ class GitHubBackupSystem:
             GITHUB_REPO_OWNER not in ('', 'your-username') and
             GITHUB_REPO_NAME not in ('', 'your-repo')
         )
-        print(f"🔍 GitHub config valid: {is_valid}")
+        print(f"GitHub config check: TOKEN={'SET' if GITHUB_TOKEN else 'MISSING'}, OWNER={GITHUB_REPO_OWNER or 'MISSING'}, REPO={GITHUB_REPO_NAME or 'MISSING'}")
         return is_valid
     
     def _create_session(self):
@@ -99,14 +102,12 @@ class GitHubBackupSystem:
         return f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents/{file_path}"
     
     def _get_versioned_path(self, version_number):
-        """Get the versioned file path"""
         if version_number == 0:
             return f"{self.backup_dir}/{self.backup_filename}"
         else:
             return f"{self.backup_dir}/{self.backup_basename}({version_number}){self.backup_extension}"
     
     def _get_local_stats(self):
-        """Get detailed statistics from local data"""
         try:
             users_file = self.data_dir / "users.json"
             pricing_file = self.data_dir / "pricing.json"
@@ -125,7 +126,6 @@ class GitHubBackupSystem:
             
             files_count = 0
             total_file_size = 0
-            file_types = {}
             
             if self.files_root.exists():
                 for user_dir in self.files_root.iterdir():
@@ -134,23 +134,19 @@ class GitHubBackupSystem:
                             if file_path.is_file():
                                 files_count += 1
                                 total_file_size += file_path.stat().st_size
-                                ext = file_path.suffix.lower()
-                                file_types[ext] = file_types.get(ext, 0) + 1
             
             return {
                 'users_count': users_count,
                 'paid_count': paid_count,
                 'files_count': files_count,
                 'total_file_size_mb': round(total_file_size / (1024 * 1024), 2),
-                'file_types': file_types,
                 'has_data': users_count > 0 or files_count > 0
             }
         except Exception as e:
-            print(f"⚠️ Local stats error: {e}")
-            return {'users_count': 0, 'paid_count': 0, 'files_count': 0, 'total_file_size_mb': 0, 'file_types': {}, 'has_data': False}
+            print(f"Local stats error: {e}")
+            return {'users_count': 0, 'paid_count': 0, 'files_count': 0, 'total_file_size_mb': 0, 'has_data': False}
     
     def _get_github_stats(self):
-        """Get statistics from the latest GitHub backup"""
         if self._last_github_stats and time.time() - self._last_github_stats.get('_timestamp', 0) < 60:
             return self._last_github_stats
         
@@ -186,12 +182,11 @@ class GitHubBackupSystem:
             self._last_github_stats = result
             return result
         except Exception as e:
-            print(f"⚠️ Failed to get GitHub stats: {e}")
+            print(f"Failed to get GitHub stats: {e}")
             self._last_github_stats = None
             return None
     
     def _get_all_github_backups(self):
-        """Get list of all backup files on GitHub"""
         try:
             api_url = self._get_file_api_url(self.backup_dir)
             r = self._session.get(
@@ -234,11 +229,10 @@ class GitHubBackupSystem:
             backup_files.sort(key=lambda x: x['version'])
             return backup_files
         except Exception as e:
-            print(f"⚠️ Failed to list backup files: {e}")
+            print(f"Failed to list backup files: {e}")
             return []
     
     def _get_next_version(self, backup_files):
-        """Get the next available version number"""
         if not backup_files:
             return 0
         
@@ -249,7 +243,6 @@ class GitHubBackupSystem:
         return version
     
     def _upload_file_to_github(self, file_path, content, commit_message):
-        """Upload a file to GitHub"""
         try:
             api_url = self._get_file_api_url(file_path)
             r = self._session.get(
@@ -288,7 +281,6 @@ class GitHubBackupSystem:
             return False, str(e)
     
     def _cleanup_old_backups(self, backup_files):
-        """Delete old backup versions beyond MAX_BACKUP_VERSIONS"""
         if len(backup_files) <= MAX_BACKUP_VERSIONS:
             return
         
@@ -309,12 +301,11 @@ class GitHubBackupSystem:
                     json=payload,
                     timeout=30
                 )
-                print(f"🗑️ Removed old backup: {backup['name']}")
+                print(f"Removed old backup: {backup['name']}")
             except Exception as e:
-                print(f"⚠️ Failed to remove old backup: {e}")
+                print(f"Failed to remove old backup: {e}")
     
     def _should_backup(self, local_stats):
-        """SMART COMPARISON: Check if local data is GREATER than GitHub data"""
         github_stats = self._get_github_stats()
         
         if not github_stats:
@@ -340,18 +331,17 @@ class GitHubBackupSystem:
                 return True, "Data content changed"
         
         if local_users < github_users:
-            return False, f"Local has fewer users ({local_users} < {github_users}) - would lose data!"
+            return False, f"Local has fewer users ({local_users} < {github_users})"
         
         if local_files < github_files and github_files > 0:
-            return False, f"Local has fewer files ({local_files} < {github_files}) - would lose data!"
+            return False, f"Local has fewer files ({local_files} < {github_files})"
         
         if local_users == 0 and github_users > 0:
-            return False, "Local has 0 users but GitHub has users - fresh deploy detected!"
+            return False, "Local has 0 users but GitHub has users"
         
         return True, "All safety checks passed"
     
     def _get_data_hash(self):
-        """Get a hash of current data to detect changes"""
         try:
             users_file = self.data_dir / "users.json"
             pricing_file = self.data_dir / "pricing.json"
@@ -381,7 +371,6 @@ class GitHubBackupSystem:
             return str(time.time())
     
     def create_backup_data(self):
-        """Create backup data from current VPS panel data"""
         try:
             users_file = self.data_dir / "users.json"
             pricing_file = self.data_dir / "pricing.json"
@@ -428,11 +417,10 @@ class GitHubBackupSystem:
             
             return backup
         except Exception as e:
-            print(f"❌ Backup data creation error: {e}")
+            print(f"Backup data creation error: {e}")
             return None
     
     def backup_to_github(self, reason="Auto backup"):
-        """VERSIONED BACKUP: Creates database.json, then database(1).json, database(2).json, etc."""
         global _last_backup_time
         
         if not self.is_enabled:
@@ -441,23 +429,23 @@ class GitHubBackupSystem:
         local_stats = self._get_local_stats()
         
         if local_stats['users_count'] < MIN_USER_THRESHOLD and not local_stats['has_data']:
-            print(f"ℹ️ Skipping backup: Only {local_stats['users_count']} users (minimum {MIN_USER_THRESHOLD} required)")
+            print(f"Skipping backup: Only {local_stats['users_count']} users")
             return False
         
         should_backup, reason_text = self._should_backup(local_stats)
         
         if not should_backup:
-            print(f"⚠️ Backup BLOCKED: {reason_text}")
+            print(f"Backup BLOCKED: {reason_text}")
             return False
         
         current_time = time.time()
         if current_time - _last_backup_time < _MIN_BACKUP_INTERVAL:
-            print(f"ℹ️ Skipping backup: Too soon since last backup")
+            print("Skipping backup: Too soon since last backup")
             return True
         
         current_hash = self._get_data_hash()
         if self._last_backup_data == current_hash:
-            print(f"ℹ️ Skipping backup: No data changes detected")
+            print("Skipping backup: No data changes detected")
             return True
         
         with _github_push_lock:
@@ -473,7 +461,6 @@ class GitHubBackupSystem:
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 stats = backup_data["stats"]
                 
-                # Update main database.json
                 commit_msg = f"{reason} | {timestamp} | Users: {stats['users_count']} | Files: {stats['files_count']}"
                 success, result = self._upload_file_to_github(
                     GITHUB_BACKUP_PATH,
@@ -482,12 +469,11 @@ class GitHubBackupSystem:
                 )
                 
                 if not success:
-                    print(f"❌ Failed to update {self.backup_filename}: {result}")
+                    print(f"Failed to update {self.backup_filename}: {result}")
                     return False
                 
-                print(f"✅ Updated {self.backup_filename}")
+                print(f"Updated {self.backup_filename}")
                 
-                # Create numbered copy
                 if next_version > 0:
                     versioned_path = self._get_versioned_path(next_version)
                     versioned_commit_msg = f"{reason} | {timestamp} | Version {next_version} | Users: {stats['users_count']}"
@@ -499,11 +485,10 @@ class GitHubBackupSystem:
                     )
                     
                     if success:
-                        print(f"✅ Created {self.backup_basename}({next_version}){self.backup_extension}")
+                        print(f"Created {self.backup_basename}({next_version}){self.backup_extension}")
                     else:
-                        print(f"⚠️ Failed to create versioned backup: {result}")
+                        print(f"Failed to create versioned backup: {result}")
                 
-                # Cleanup old backups
                 backup_files = self._get_all_github_backups()
                 self._cleanup_old_backups(backup_files)
                 
@@ -521,15 +506,14 @@ class GitHubBackupSystem:
                 if len(self._backup_history) > 20:
                     self._backup_history.pop(0)
                 
-                print(f"✅ Versioned backup successful (#{self._backup_count})")
+                print(f"Versioned backup successful (#{self._backup_count})")
                 return True
                     
             except Exception as e:
-                print(f"❌ Backup error: {e}")
+                print(f"Backup error: {e}")
                 return False
     
     def force_restore_from_github(self, version=None):
-        """FORCE RESTORE - Restore from GitHub backup"""
         if not self.is_enabled:
             return False
         
@@ -537,11 +521,11 @@ class GitHubBackupSystem:
             if version is not None and version > 0:
                 restore_path = self._get_versioned_path(version)
                 restore_name = f"{self.backup_basename}({version}){self.backup_extension}"
-                print(f"🔄 FORCE RESTORE: Fetching versioned backup: {restore_name}")
+                print(f"FORCE RESTORE: Fetching versioned backup: {restore_name}")
             else:
                 restore_path = GITHUB_BACKUP_PATH
                 restore_name = self.backup_filename
-                print("🔄 FORCE RESTORE: Fetching latest backup from GitHub...")
+                print("FORCE RESTORE: Fetching latest backup from GitHub...")
             
             r = self._session.get(
                 self._get_file_api_url(restore_path),
@@ -552,20 +536,20 @@ class GitHubBackupSystem:
             
             if r.status_code != 200:
                 if version is None:
-                    print("⚠️ Latest backup not found, checking versioned backups...")
+                    print("Latest backup not found, checking versioned backups...")
                     backup_files = self._get_all_github_backups()
                     if backup_files:
                         latest = backup_files[-1]
                         if latest['version'] > 0:
                             return self.force_restore_from_github(latest['version'])
-                print(f"❌ No backup found on GitHub ({r.status_code})")
+                print(f"No backup found on GitHub ({r.status_code})")
                 return False
             
             file_data = r.json()
             content = file_data.get('content', '')
             
             if not content:
-                print("❌ Empty backup content")
+                print("Empty backup content")
                 return False
             
             json_str = base64.b64decode(content.replace('\n', '')).decode()
@@ -574,7 +558,7 @@ class GitHubBackupSystem:
             data = backup_data.get("data", {})
             
             if not data.get("users") and not data.get("pricing") and not data.get("files"):
-                print("⚠️ Backup exists but has no data (empty)")
+                print("Backup exists but has no data (empty)")
                 return False
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -593,18 +577,18 @@ class GitHubBackupSystem:
             if "users" in data:
                 with open(users_file, 'w') as f:
                     json.dump(data["users"], f, indent=2)
-                print(f"✅ FORCE RESTORE: Restored {len(data['users'])} users from {restore_name}")
+                print(f"FORCE RESTORE: Restored {len(data['users'])} users from {restore_name}")
             
             pricing_file = self.data_dir / "pricing.json"
             if "pricing" in data:
                 with open(pricing_file, 'w') as f:
                     json.dump(data["pricing"], f, indent=2)
-                print("✅ FORCE RESTORE: Restored pricing data")
+                print("FORCE RESTORE: Restored pricing data")
             
             timestamp = backup_data.get("timestamp", "unknown")
             stats = backup_data.get("stats", {})
-            print(f"✅ FORCE RESTORE Complete! Backup from: {timestamp}")
-            print(f"   📊 Users: {stats.get('users_count', 0)} | Files: {stats.get('files_count', 0)}")
+            print(f"FORCE RESTORE Complete! Backup from: {timestamp}")
+            print(f"   Users: {stats.get('users_count', 0)} | Files: {stats.get('files_count', 0)}")
             
             self._restore_success = True
             self._last_backup_data = self._get_data_hash()
@@ -612,27 +596,25 @@ class GitHubBackupSystem:
             return True
             
         except Exception as e:
-            print(f"❌ Force restore error: {e}")
+            print(f"Force restore error: {e}")
             return False
     
     def restore_on_startup(self):
-        """Restore on startup - ALWAYS restores from GitHub"""
         if not self.is_enabled:
-            print("⚠️ GitHub backup not configured, skipping restore")
+            print("GitHub backup not configured, skipping restore")
             return False
         
-        print("🔄 STARTUP: Forcing restore from GitHub backup...")
+        print("STARTUP: Forcing restore from GitHub backup...")
         result = self.force_restore_from_github()
         
         if result:
-            print("✅ STARTUP RESTORE SUCCESSFUL!")
+            print("STARTUP RESTORE SUCCESSFUL!")
         else:
-            print("ℹ️ No backup found on GitHub - starting fresh")
+            print("No backup found on GitHub - starting fresh")
         
         return result
     
     def get_backup_info(self):
-        """Get info about latest backup"""
         if not self.is_enabled:
             return {"enabled": False}
         
@@ -658,26 +640,24 @@ class GitHubBackupSystem:
 github_backup = None
 
 def init_github_backup_force(data_dir, files_root):
-    """Initialize GitHub backup with FORCE RESTORE on startup"""
     global github_backup
     github_backup = GitHubBackupSystem(data_dir, files_root)
     
     if github_backup.is_enabled:
-        print("🔄 GitHub backup initialized - FORCE RESTORE enabled on startup")
+        print("GitHub backup initialized - FORCE RESTORE enabled on startup")
         restored = github_backup.restore_on_startup()
         if restored:
-            print("✅ Data restored from GitHub backup successfully!")
+            print("Data restored from GitHub backup successfully!")
         else:
-            print("ℹ️ No backup found - starting with empty database")
+            print("No backup found - starting with empty database")
         
         start_auto_backup()
     else:
-        print("⚠️ GitHub backup not configured - data will be lost on restart")
+        print("GitHub backup not configured - data will be lost on restart")
     
     return github_backup
 
 def start_auto_backup():
-    """Start automatic backup every 60 seconds with versioning"""
     def backup_loop():
         consecutive_failures = 0
         while True:
@@ -694,42 +674,38 @@ def start_auto_backup():
                         else:
                             consecutive_failures += 1
                     else:
-                        print(f"ℹ️ Auto-backup skipped: {reason}")
+                        print(f"Auto-backup skipped: {reason}")
                         
                 if consecutive_failures > 5:
-                    print(f"⚠️ {consecutive_failures} consecutive backup failures - waiting 5 minutes")
+                    print(f"{consecutive_failures} consecutive backup failures - waiting 5 minutes")
                     time.sleep(240)
                     consecutive_failures = 0
                     
             except Exception as e:
-                print(f"⚠️ Auto-backup error: {e}")
+                print(f"Auto-backup error: {e}")
                 consecutive_failures += 1
     
     thread = threading.Thread(target=backup_loop, daemon=True)
     thread.start()
-    print("🛡️ Auto-backup thread started (versioned backups every 60 seconds)")
+    print("Auto-backup thread started (versioned backups every 60 seconds)")
 
 def manual_backup(reason="Manual backup"):
-    """Trigger manual backup"""
     if github_backup:
         return github_backup.backup_to_github(reason)
     return False
 
 def get_backup_status():
-    """Get backup status"""
     if github_backup:
         return github_backup.get_backup_info()
     return {"enabled": False}
 
 def has_data():
-    """Check if there's any data in the system"""
     if github_backup:
         stats = github_backup._get_local_stats()
         return stats['has_data']
     return False
 
 def force_restore(version=None):
-    """Force restore from GitHub (latest or specific version)"""
     if github_backup:
         return github_backup.force_restore_from_github(version)
     return False
