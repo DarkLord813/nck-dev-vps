@@ -1,3 +1,7 @@
+"""
+GitHub Backup & Restore Module for NCK Dev VPS
+VERSIONED BACKUPS - Creates database.json, database(1).json, database(2).json, etc.
+"""
 import os
 import json
 import time
@@ -15,7 +19,7 @@ GITHUB_REPO_OWNER = os.environ.get("GITHUB_REPO_OWNER", "")
 GITHUB_REPO_NAME = os.environ.get("GITHUB_REPO_NAME", "")
 GITHUB_BACKUP_BRANCH = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
 GITHUB_BACKUP_PATH = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
-GITHUB_BACKUP_DIR = os.path.dirname(GITHUB_BACKUP_PATH)  # "backups"
+GITHUB_BACKUP_DIR = os.path.dirname(GITHUB_BACKUP_PATH)
 
 # Max number of versioned backups to keep
 MAX_BACKUP_VERSIONS = 10
@@ -42,11 +46,11 @@ class GitHubBackupSystem:
         self._backup_history = []
         self._last_github_stats = None
         
-        # Parse backup path: "backups/database.json" -> base name "database"
+        # Parse backup path
         self.backup_dir = GITHUB_BACKUP_DIR
-        self.backup_filename = os.path.basename(GITHUB_BACKUP_PATH)  # "database.json"
-        self.backup_basename = os.path.splitext(self.backup_filename)[0]  # "database"
-        self.backup_extension = os.path.splitext(self.backup_filename)[1]  # ".json"
+        self.backup_filename = os.path.basename(GITHUB_BACKUP_PATH)
+        self.backup_basename = os.path.splitext(self.backup_filename)[0]
+        self.backup_extension = os.path.splitext(self.backup_filename)[1]
         
         if self.is_enabled:
             print(f"✅ GitHub Backup enabled: {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
@@ -84,11 +88,10 @@ class GitHubBackupSystem:
         }
     
     def _get_file_api_url(self, file_path):
-        """Get GitHub API URL for a specific file path"""
         return f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents/{file_path}"
     
     def _get_versioned_path(self, version_number):
-        """Get the versioned file path: database(1).json, database(2).json, etc."""
+        """Get the versioned file path"""
         if version_number == 0:
             return f"{self.backup_dir}/{self.backup_filename}"
         else:
@@ -139,12 +142,11 @@ class GitHubBackupSystem:
             return {'users_count': 0, 'paid_count': 0, 'files_count': 0, 'total_file_size_mb': 0, 'file_types': {}, 'has_data': False}
     
     def _get_github_stats(self):
-        """Get statistics from the latest GitHub backup (with caching)"""
+        """Get statistics from the latest GitHub backup"""
         if self._last_github_stats and time.time() - self._last_github_stats.get('_timestamp', 0) < 60:
             return self._last_github_stats
         
         try:
-            # Try to get the main backup file
             api_url = self._get_file_api_url(GITHUB_BACKUP_PATH)
             r = self._session.get(
                 api_url,
@@ -196,13 +198,9 @@ class GitHubBackupSystem:
             files = r.json()
             backup_files = []
             
-            # Pattern: database.json, database(1).json, database(2).json, etc.
-            pattern = f"{self.backup_basename}"
-            
             for file_info in files:
                 if file_info['type'] == 'file':
                     filename = file_info['name']
-                    # Match: database.json or database(1).json
                     if filename == self.backup_filename:
                         backup_files.append({
                             'path': file_info['path'],
@@ -212,7 +210,6 @@ class GitHubBackupSystem:
                             'size': file_info.get('size', 0)
                         })
                     elif filename.startswith(f"{self.backup_basename}(") and filename.endswith(self.backup_extension):
-                        # Extract version number: database(1).json -> 1
                         try:
                             version_str = filename.replace(f"{self.backup_basename}(", "").replace(self.backup_extension, "")
                             version = int(version_str)
@@ -226,9 +223,7 @@ class GitHubBackupSystem:
                         except ValueError:
                             pass
             
-            # Sort by version number
             backup_files.sort(key=lambda x: x['version'])
-            
             return backup_files
         except Exception as e:
             print(f"⚠️ Failed to list backup files: {e}")
@@ -239,20 +234,15 @@ class GitHubBackupSystem:
         if not backup_files:
             return 0
         
-        # Get all existing version numbers
         versions = [f['version'] for f in backup_files]
-        
-        # Find the next available version
         version = 0
         while version in versions:
             version += 1
-        
         return version
     
     def _upload_file_to_github(self, file_path, content, commit_message):
         """Upload a file to GitHub"""
         try:
-            # Get SHA if file exists
             api_url = self._get_file_api_url(file_path)
             r = self._session.get(
                 api_url,
@@ -265,7 +255,6 @@ class GitHubBackupSystem:
             if r.status_code == 200:
                 file_sha = r.json().get('sha')
             
-            # Encode content
             encoded = base64.b64encode(content.encode()).decode()
             
             payload = {
@@ -295,10 +284,7 @@ class GitHubBackupSystem:
         if len(backup_files) <= MAX_BACKUP_VERSIONS:
             return
         
-        # Sort by version
         sorted_backups = sorted(backup_files, key=lambda x: x['version'])
-        
-        # Keep the latest MAX_BACKUP_VERSIONS
         to_delete = sorted_backups[:-MAX_BACKUP_VERSIONS]
         
         for backup in to_delete:
@@ -320,9 +306,7 @@ class GitHubBackupSystem:
                 print(f"⚠️ Failed to remove old backup: {e}")
     
     def _should_backup(self, local_stats):
-        """
-        SMART COMPARISON: Check if local data is GREATER than GitHub data
-        """
+        """SMART COMPARISON: Check if local data is GREATER than GitHub data"""
         github_stats = self._get_github_stats()
         
         if not github_stats:
@@ -333,33 +317,26 @@ class GitHubBackupSystem:
         local_files = local_stats['files_count']
         github_files = github_stats['files_count']
         
-        # LOCAL has MORE users than GitHub -> ALLOW
         if local_users > github_users:
             return True, f"Local has more users ({local_users} > {github_users})"
         
-        # LOCAL has MORE files than GitHub -> ALLOW
         if local_files > github_files:
             return True, f"Local has more files ({local_files} > {github_files})"
         
-        # SAME users but MORE files -> ALLOW
         if local_users == github_users and local_files > github_files:
             return True, f"Same users but more files ({local_files} > {github_files})"
         
-        # SAME counts but content changed -> ALLOW
         if local_users == github_users and local_files == github_files:
             local_hash = self._get_data_hash()
             if self._last_backup_data != local_hash:
                 return True, "Data content changed"
         
-        # LOCAL has LESS users than GitHub -> BLOCK
         if local_users < github_users:
             return False, f"Local has fewer users ({local_users} < {github_users}) - would lose data!"
         
-        # LOCAL has LESS files than GitHub -> BLOCK
         if local_files < github_files and github_files > 0:
             return False, f"Local has fewer files ({local_files} < {github_files}) - would lose data!"
         
-        # LOCAL has 0 users but GitHub has users -> BLOCK
         if local_users == 0 and github_users > 0:
             return False, "Local has 0 users but GitHub has users - fresh deploy detected!"
         
@@ -447,37 +424,29 @@ class GitHubBackupSystem:
             return None
     
     def backup_to_github(self, reason="Auto backup"):
-        """
-        VERSIONED BACKUP: Creates database.json, then database(1).json, database(2).json, etc.
-        Always updates database.json with latest data, and creates a numbered copy.
-        """
+        """VERSIONED BACKUP: Creates database.json, then database(1).json, database(2).json, etc."""
         global _last_backup_time
         
         if not self.is_enabled:
             return False
         
-        # Get local stats
         local_stats = self._get_local_stats()
         
-        # Check minimum threshold
         if local_stats['users_count'] < MIN_USER_THRESHOLD and not local_stats['has_data']:
             print(f"ℹ️ Skipping backup: Only {local_stats['users_count']} users (minimum {MIN_USER_THRESHOLD} required)")
             return False
         
-        # SMART COMPARISON: Should we backup?
         should_backup, reason_text = self._should_backup(local_stats)
         
         if not should_backup:
             print(f"⚠️ Backup BLOCKED: {reason_text}")
             return False
         
-        # Rate limit check
         current_time = time.time()
         if current_time - _last_backup_time < _MIN_BACKUP_INTERVAL:
             print(f"ℹ️ Skipping backup: Too soon since last backup")
             return True
         
-        # Check if data has actually changed
         current_hash = self._get_data_hash()
         if self._last_backup_data == current_hash:
             print(f"ℹ️ Skipping backup: No data changes detected")
@@ -489,19 +458,14 @@ class GitHubBackupSystem:
                 if not backup_data:
                     return False
                 
-                # Convert to JSON string
                 json_str = json.dumps(backup_data, indent=2)
-                
-                # Get list of existing backups
                 backup_files = self._get_all_github_backups()
-                
-                # Get next version number for the numbered copy
                 next_version = self._get_next_version(backup_files)
                 
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 stats = backup_data["stats"]
                 
-                # === STEP 1: Update main database.json ===
+                # Update main database.json
                 commit_msg = f"{reason} | {timestamp} | Users: {stats['users_count']} | Files: {stats['files_count']}"
                 success, result = self._upload_file_to_github(
                     GITHUB_BACKUP_PATH,
@@ -515,7 +479,7 @@ class GitHubBackupSystem:
                 
                 print(f"✅ Updated {self.backup_filename}")
                 
-                # === STEP 2: Create numbered copy database(1).json, etc. ===
+                # Create numbered copy
                 if next_version > 0:
                     versioned_path = self._get_versioned_path(next_version)
                     versioned_commit_msg = f"{reason} | {timestamp} | Version {next_version} | Users: {stats['users_count']}"
@@ -531,7 +495,7 @@ class GitHubBackupSystem:
                     else:
                         print(f"⚠️ Failed to create versioned backup: {result}")
                 
-                # === STEP 3: Cleanup old backups (keep MAX_BACKUP_VERSIONS) ===
+                # Cleanup old backups
                 backup_files = self._get_all_github_backups()
                 self._cleanup_old_backups(backup_files)
                 
@@ -557,16 +521,11 @@ class GitHubBackupSystem:
                 return False
     
     def force_restore_from_github(self, version=None):
-        """
-        FORCE RESTORE - Restore from GitHub backup.
-        If version is None, restores the latest (database.json).
-        If version is specified, restores that numbered backup.
-        """
+        """FORCE RESTORE - Restore from GitHub backup"""
         if not self.is_enabled:
             return False
         
         try:
-            # Determine which file to restore
             if version is not None and version > 0:
                 restore_path = self._get_versioned_path(version)
                 restore_name = f"{self.backup_basename}({version}){self.backup_extension}"
@@ -584,12 +543,11 @@ class GitHubBackupSystem:
             )
             
             if r.status_code != 200:
-                # If latest not found, try versioned backups
                 if version is None:
                     print("⚠️ Latest backup not found, checking versioned backups...")
                     backup_files = self._get_all_github_backups()
                     if backup_files:
-                        latest = backup_files[-1]  # Highest version
+                        latest = backup_files[-1]
                         if latest['version'] > 0:
                             return self.force_restore_from_github(latest['version'])
                 print(f"❌ No backup found on GitHub ({r.status_code})")
@@ -602,23 +560,19 @@ class GitHubBackupSystem:
                 print("❌ Empty backup content")
                 return False
             
-            # Decode base64
             json_str = base64.b64decode(content.replace('\n', '')).decode()
             backup_data = json.loads(json_str)
             
             data = backup_data.get("data", {})
             
-            # Check if backup has any data
             if not data.get("users") and not data.get("pricing") and not data.get("files"):
                 print("⚠️ Backup exists but has no data (empty)")
                 return False
             
-            # Save a copy of current data before overwriting
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_dir = self.data_dir / "pre_restore_backups"
             backup_dir.mkdir(exist_ok=True)
             
-            # Backup current data if it exists
             users_file = self.data_dir / "users.json"
             if users_file.exists():
                 shutil.copy(users_file, backup_dir / f"users_{timestamp}.json")
@@ -627,21 +581,18 @@ class GitHubBackupSystem:
             if pricing_file.exists():
                 shutil.copy(pricing_file, backup_dir / f"pricing_{timestamp}.json")
             
-            # Restore users.json
             users_file = self.data_dir / "users.json"
             if "users" in data:
                 with open(users_file, 'w') as f:
                     json.dump(data["users"], f, indent=2)
                 print(f"✅ FORCE RESTORE: Restored {len(data['users'])} users from {restore_name}")
             
-            # Restore pricing.json
             pricing_file = self.data_dir / "pricing.json"
             if "pricing" in data:
                 with open(pricing_file, 'w') as f:
                     json.dump(data["pricing"], f, indent=2)
                 print("✅ FORCE RESTORE: Restored pricing data")
             
-            # Get metadata
             timestamp = backup_data.get("timestamp", "unknown")
             stats = backup_data.get("stats", {})
             print(f"✅ FORCE RESTORE Complete! Backup from: {timestamp}")

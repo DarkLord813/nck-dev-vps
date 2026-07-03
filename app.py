@@ -326,7 +326,6 @@ def require_user(f):
 # ---------- routes ----------
 @app.route("/")
 def index():
-    """Root route - redirects to home/landing"""
     if is_owner():
         return redirect(url_for("owner_dashboard"))
     if current_user():
@@ -335,7 +334,6 @@ def index():
 
 @app.route("/home")
 def landing():
-    """Landing page - public"""
     return render_template("landing.html", 
         pricing=load_pricing(), 
         flw_key=FLW_PUBLIC_KEY, 
@@ -345,7 +343,6 @@ def landing():
 
 @app.route("/pricing")
 def pricing_page():
-    """Pricing page - public"""
     return render_template("pricing.html", 
         pricing=load_pricing(), 
         flw_key=FLW_PUBLIC_KEY, 
@@ -495,7 +492,6 @@ def initialize_payment():
             "Content-Type": "application/json"
         }
         
-        # Add encryption key if available
         if FLW_ENCRYPTION_KEY:
             headers["Encryption-Key"] = FLW_ENCRYPTION_KEY
         
@@ -551,7 +547,6 @@ def payment_verify():
             "Content-Type": "application/json"
         }
         
-        # Add encryption key if available
         if FLW_ENCRYPTION_KEY:
             headers["Encryption-Key"] = FLW_ENCRYPTION_KEY
         
@@ -592,7 +587,6 @@ def payment_cancel():
 @app.route("/admin/backup", methods=["POST"])
 @require_owner
 def admin_backup():
-    """Manually trigger a versioned backup"""
     def do_backup():
         success = manual_backup("Manual backup triggered by admin")
         if success:
@@ -607,7 +601,6 @@ def admin_backup():
 @app.route("/admin/backup-status")
 @require_owner
 def admin_backup_status():
-    """Check backup status with version information"""
     status = get_backup_status()
     status['has_data'] = has_data()
     return jsonify(status)
@@ -615,7 +608,6 @@ def admin_backup_status():
 @app.route("/admin/restore", methods=["POST"])
 @require_owner
 def admin_restore():
-    """Manually restore from GitHub backup (latest)"""
     if not github_backup or not github_backup.is_enabled:
         flash("❌ GitHub backup not configured!", "error")
         return redirect(url_for("owner_dashboard"))
@@ -630,15 +622,12 @@ def admin_restore():
 @app.route("/admin/force-restore", methods=["POST"])
 @require_owner
 def admin_force_restore():
-    """Force restore even if local data exists (for emergencies)"""
     if not github_backup or not github_backup.is_enabled:
         flash("❌ GitHub backup not configured!", "error")
         return redirect(url_for("owner_dashboard"))
     
-    # Backup current data first (just in case)
     manual_backup("Pre-restore backup")
     
-    # Force restore
     success = force_restore()
     if success:
         flash("✅ Force restore successful! Data reloaded from GitHub.", "success")
@@ -649,7 +638,6 @@ def admin_force_restore():
 @app.route("/admin/restore-version/<int:version>", methods=["POST"])
 @require_owner
 def admin_restore_version(version):
-    """Restore a specific versioned backup"""
     if not github_backup or not github_backup.is_enabled:
         flash("❌ GitHub backup not configured!", "error")
         return redirect(url_for("owner_dashboard"))
@@ -669,7 +657,6 @@ def owner_dashboard():
     now = time.time()
     base = request.host_url.rstrip("/")
     
-    # Get backup info for display
     backup_info = get_backup_status()
     
     return render_template("owner.html", 
@@ -804,7 +791,6 @@ def upload():
             continue
         f.save(udir / name)
     flash("Files uploaded successfully!", "success")
-    # Trigger backup after file upload
     threading.Thread(target=lambda: manual_backup("File upload"), daemon=True).start()
     return redirect(url_for("user_dashboard"))
 
@@ -817,7 +803,6 @@ def file_delete(name):
     if p.exists() and p.is_file():
         p.unlink()
         flash(f"File {name} deleted!", "success")
-        # Trigger backup after file deletion
         threading.Thread(target=lambda: manual_backup("File deleted"), daemon=True).start()
     return redirect(url_for("user_dashboard"))
 
@@ -884,17 +869,15 @@ def install():
     ok, msg = run_install(u, cmd)
     return jsonify({"ok": ok, "msg": msg})
 
-# ---------- Health Check ----------
 @app.route("/healthz")
 def health():
     return "ok", 200
 
-# ---------- Debug Route ----------
 @app.route("/debug")
 def debug():
     return jsonify({
         "status": "running",
-        "service": "NCK Dev VPS",
+        "service": "NCK DEV VPS",
         "env_vars": {
             "SECRET_KEY": "set" if os.environ.get("SECRET_KEY") else "missing",
             "FLW_PUBLIC_KEY": "set" if os.environ.get("FLW_PUBLIC_KEY") else "missing",
@@ -906,6 +889,5 @@ def debug():
     })
 
 if __name__ == "__main__":
-    # Choreo uses port 8080 by default
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False)
