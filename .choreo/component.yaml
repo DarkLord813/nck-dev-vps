@@ -3,7 +3,7 @@ kind: Component
 metadata:
   name: nck-dev-vps
   displayName: NCK DEV VPS
-  description: VPS Panel with Flutterwave payments & GitHub backup
+  description: NCK Dev VPS Panel with Flutterwave payments & GitHub backup
   version: v1.0
   annotations:
     choreo.dev/display-name: NCK DEV VPS
