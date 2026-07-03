@@ -325,7 +325,8 @@ def require_user(f):
 
 # ---------- routes ----------
 @app.route("/")
-def home():
+def index():
+    """Root route - redirects to home/landing"""
     if is_owner():
         return redirect(url_for("owner_dashboard"))
     if current_user():
@@ -334,6 +335,7 @@ def home():
 
 @app.route("/home")
 def landing():
+    """Landing page - public"""
     return render_template("landing.html", 
         pricing=load_pricing(), 
         flw_key=FLW_PUBLIC_KEY, 
@@ -343,6 +345,7 @@ def landing():
 
 @app.route("/pricing")
 def pricing_page():
+    """Pricing page - public"""
     return render_template("pricing.html", 
         pricing=load_pricing(), 
         flw_key=FLW_PUBLIC_KEY, 
@@ -486,18 +489,6 @@ def initialize_payment():
         amount = float(amount)
         
         tx_ref = f"VPS-{username}-{secrets.token_hex(8)}"
-        
-        # Encrypt data for Flutterwave (using encryption key)
-        encrypted_data = None
-        if FLW_ENCRYPTION_KEY:
-            try:
-                from cryptography.fernet import Fernet
-                # Note: Flutterwave expects AES encryption, but for simplicity we'll use their standard method
-                # The encryption key is used for sensitive data like card details
-                # For this implementation, we'll pass it in the headers
-                pass
-            except ImportError:
-                pass
         
         headers = {
             "Authorization": f"Bearer {FLW_SECRET_KEY}",
@@ -893,9 +884,26 @@ def install():
     ok, msg = run_install(u, cmd)
     return jsonify({"ok": ok, "msg": msg})
 
+# ---------- Health Check ----------
 @app.route("/healthz")
 def health():
-    return "ok"
+    return "ok", 200
+
+# ---------- Debug Route ----------
+@app.route("/debug")
+def debug():
+    return jsonify({
+        "status": "running",
+        "service": "NCK Dev VPS",
+        "env_vars": {
+            "SECRET_KEY": "set" if os.environ.get("SECRET_KEY") else "missing",
+            "FLW_PUBLIC_KEY": "set" if os.environ.get("FLW_PUBLIC_KEY") else "missing",
+            "FLW_SECRET_KEY": "set" if os.environ.get("FLW_SECRET_KEY") else "missing",
+            "FLW_ENCRYPTION_KEY": "set" if os.environ.get("FLW_ENCRYPTION_KEY") else "missing",
+            "GITHUB_TOKEN": "set" if os.environ.get("GITHUB_TOKEN") else "missing",
+        },
+        "github_backup_enabled": bool(github_backup and github_backup.is_enabled)
+    })
 
 if __name__ == "__main__":
     # Choreo uses port 8080 by default
