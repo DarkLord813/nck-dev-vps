@@ -1,7 +1,3 @@
-"""
-GitHub Backup & Restore Module for NCK Dev VPS
-VERSIONED BACKUPS - Creates database.json, database(1).json, database(2).json, etc.
-"""
 import os
 import json
 import time
@@ -13,13 +9,23 @@ from pathlib import Path
 from datetime import datetime
 from collections import Counter
 
-# GitHub Configuration (from environment variables)
+# ==================== GITHUB ENV CHECK ====================
+# These must be set in Render environment variables
+# DO NOT HARDCODE TOKENS HERE!
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO_OWNER = os.environ.get("GITHUB_REPO_OWNER", "")
 GITHUB_REPO_NAME = os.environ.get("GITHUB_REPO_NAME", "")
 GITHUB_BACKUP_BRANCH = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
 GITHUB_BACKUP_PATH = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
 GITHUB_BACKUP_DIR = os.path.dirname(GITHUB_BACKUP_PATH)
+
+if not GITHUB_TOKEN:
+    print("❌ ERROR: GITHUB_TOKEN is not set in environment variables!")
+if not GITHUB_REPO_OWNER or GITHUB_REPO_OWNER == "your-username":
+    print("❌ ERROR: GITHUB_REPO_OWNER is not set in environment variables!")
+if not GITHUB_REPO_NAME or GITHUB_REPO_NAME == "your-repo":
+    print("❌ ERROR: GITHUB_REPO_NAME is not set in environment variables!")
+# ==================== END GITHUB ENV CHECK ====================
 
 # Max number of versioned backups to keep
 MAX_BACKUP_VERSIONS = 10
@@ -62,13 +68,15 @@ class GitHubBackupSystem:
     
     def _check_config(self):
         """Check if GitHub backup is properly configured"""
-        return bool(
+        is_valid = bool(
             GITHUB_TOKEN and
             GITHUB_REPO_OWNER and
             GITHUB_REPO_NAME and
             GITHUB_REPO_OWNER not in ('', 'your-username') and
             GITHUB_REPO_NAME not in ('', 'your-repo')
         )
+        print(f"🔍 GitHub config valid: {is_valid}")
+        return is_valid
     
     def _create_session(self):
         """Create HTTP session with connection pooling"""

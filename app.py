@@ -76,6 +76,24 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
+# ==================== GITHUB CONFIG CHECK ====================
+# This ensures GitHub variables are loaded from environment
+# DO NOT HARDCODE TOKENS HERE!
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO_OWNER = os.environ.get("GITHUB_REPO_OWNER", "")
+GITHUB_REPO_NAME = os.environ.get("GITHUB_REPO_NAME", "")
+GITHUB_BACKUP_BRANCH = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
+GITHUB_BACKUP_PATH = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
+
+# Check if GitHub is configured
+if not GITHUB_TOKEN:
+    print("⚠️ WARNING: GITHUB_TOKEN is not set! Backup will not work.")
+if not GITHUB_REPO_OWNER or GITHUB_REPO_OWNER == "your-username":
+    print("⚠️ WARNING: GITHUB_REPO_OWNER is not set! Backup will not work.")
+if not GITHUB_REPO_NAME or GITHUB_REPO_NAME == "your-repo":
+    print("⚠️ WARNING: GITHUB_REPO_NAME is not set! Backup will not work.")
+# ==================== END GITHUB CONFIG CHECK ====================
+
 # ---------- GitHub Backup Integration ----------
 print("=" * 60)
 print("🔄 INITIALIZING NCK DEV VPS WITH VERSIONED GITHUB BACKUP")
@@ -877,13 +895,15 @@ def health():
 def debug():
     return jsonify({
         "status": "running",
-        "service": "NCK DEV VPS",
+        "service": "NCK Dev VPS",
         "env_vars": {
             "SECRET_KEY": "set" if os.environ.get("SECRET_KEY") else "missing",
             "FLW_PUBLIC_KEY": "set" if os.environ.get("FLW_PUBLIC_KEY") else "missing",
             "FLW_SECRET_KEY": "set" if os.environ.get("FLW_SECRET_KEY") else "missing",
             "FLW_ENCRYPTION_KEY": "set" if os.environ.get("FLW_ENCRYPTION_KEY") else "missing",
             "GITHUB_TOKEN": "set" if os.environ.get("GITHUB_TOKEN") else "missing",
+            "GITHUB_REPO_OWNER": os.environ.get("GITHUB_REPO_OWNER"),
+            "GITHUB_REPO_NAME": os.environ.get("GITHUB_REPO_NAME"),
         },
         "github_backup_enabled": bool(github_backup and github_backup.is_enabled)
     })
