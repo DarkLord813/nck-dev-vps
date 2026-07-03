@@ -1,0 +1,65 @@
+apiVersion: core.choreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: nck-dev-vps
+  displayName: NCK Dev VPS
+  description: VPS Panel with Flutterwave payments & GitHub backup
+  version: v1.0
+  annotations:
+    choreo.dev/display-name: NCK Dev VPS
+    choreo.dev/component-type: service
+spec:
+  type: service
+  build:
+    buildPreset: python
+    languageVersion: 3.11.x
+    commands:
+      build: pip install -r requirements.txt
+      start: gunicorn --bind :8080 app:app
+  endpoints:
+    - name: default-endpoint
+      port: 8080
+      type: REST
+      context: /
+      networkVisibility: Public
+      security: {}
+  configuration:
+    env:
+      - name: PORT
+        value: "8080"
+      - name: SECRET_KEY
+        valueFrom:
+          type: env
+          key: SECRET_KEY
+      - name: FLW_PUBLIC_KEY
+        valueFrom:
+          type: env
+          key: FLW_PUBLIC_KEY
+      - name: FLW_SECRET_KEY
+        valueFrom:
+          type: env
+          key: FLW_SECRET_KEY
+      - name: FLW_ENCRYPTION_KEY
+        valueFrom:
+          type: env
+          key: FLW_ENCRYPTION_KEY
+      - name: GITHUB_TOKEN
+        valueFrom:
+          type: env
+          key: GITHUB_TOKEN
+      - name: GITHUB_REPO_OWNER
+        valueFrom:
+          type: env
+          key: GITHUB_REPO_OWNER
+      - name: GITHUB_REPO_NAME
+        valueFrom:
+          type: env
+          key: GITHUB_REPO_NAME
+      - name: GITHUB_BACKUP_BRANCH
+        valueFrom:
+          type: env
+          key: GITHUB_BACKUP_BRANCH
+      - name: GITHUB_BACKUP_PATH
+        valueFrom:
+          type: env
+          key: GITHUB_BACKUP_PATH
