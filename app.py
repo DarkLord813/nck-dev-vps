@@ -77,7 +77,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
-# ==================== GITHUB BACKUP SYSTEM (MERGED) ====================
+# ==================== GITHUB BACKUP SYSTEM ====================
 class GitHubBackupSystem:
     def __init__(self, data_dir, files_root):
         self.data_dir = data_dir
@@ -125,7 +125,7 @@ class GitHubBackupSystem:
                     data = json.load(f)
                     return len(data)
             return 0
-        except:
+        except Exception:
             return 0
     
     def backup(self, reason="Auto backup"):
@@ -181,7 +181,7 @@ class GitHubBackupSystem:
                 print(f"Backup successful (#{self._backup_count})")
                 return True
             else:
-                print(f"Backup failed: {r.status_code}")
+                print(f"Backup failed: {r.status_code} - {r.text[:100]}")
                 return False
                 
         except Exception as e:
@@ -761,9 +761,6 @@ def admin_backup():
 def admin_backup_status():
     status = get_backup_status()
     status['has_data'] = has_data()
-    # Add these for the frontend
-    status['repo_owner'] = os.environ.get("GITHUB_REPO_OWNER", "")
-    status['repo_name'] = os.environ.get("GITHUB_REPO_NAME", "")
     return jsonify(status)
 
 @app.route("/admin/restore", methods=["POST"])
@@ -810,9 +807,7 @@ def owner_dashboard():
         base_url=base,
         pricing=load_pricing(),
         currencies=SUPPORTED_CURRENCIES,
-        backup_info=backup_info,
-        github_repo_owner=os.environ.get("GITHUB_REPO_OWNER", ""),
-        github_repo_name=os.environ.get("GITHUB_REPO_NAME", "")
+        backup_info=backup_info
     )
 
 @app.route("/owner/create", methods=["POST"])
