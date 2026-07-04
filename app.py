@@ -1,5 +1,6 @@
 import os, json, time, uuid, shutil, subprocess, threading, signal, secrets
 import requests
+import base64
 from collections import deque
 from pathlib import Path
 from functools import wraps
@@ -76,40 +77,199 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
-# ---------- GitHub Backup Integration ----------
+# ==================== GITHUB BACKUP SYSTEM (MERGED) ====================
+class GitHubBackupSystem:
+    def __init__(self, data_dir, files_root):
+        self.data_dir = data_dir
+        self.files_root = files_root
+        
+        # Read from environment variables
+        self.token = os.environ.get("GITHUB_TOKEN", "")
+        self.repo_owner = os.environ.get("GITHUB_REPO_OWNER", "")
+        self.repo_name = os.environ.get("GITHUB_REPO_NAME", "")
+        self.branch = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
+        self.backup_path = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
+        
+        # Check if configured
+        self.is_enabled = bool(self.token and self.repo_owner and self.repo_name)
+        
+        print(f"=== GITHUB BACKUP ===")
+        print(f"Enabled: {self.is_enabled}")
+        print(f"Repo: {self.repo_owner}/{self.repo_name}")
+        print(f"Token: {'SET' if self.token else 'MISSING'}")
+        print(f"=====================")
+        
+        self._session = requests.Session()
+        self._backup_count = 0
+    
+    @property
+    def _headers(self):
+        return {
+            'Authorization': f'token {self.token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+    
+    def _get_api_url(self):
+        return f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{self.backup_path}"
+    
+    def _has_data(self):
+        users_file = self.data_dir / "users.json"
+        pricing_file = self.data_dir / "pricing.json"
+        return users_file.exists() or pricing_file.exists()
+    
+    def _get_users_count(self):
+        try:
+            users_file = self.data_dir / "users.json"
+            if users_file.exists():
+                with open(users_file, 'r') as f:
+                    data = json.load(f)
+                    return len(data)
+            return 0
+        except:
+            return 0
+    
+    def backup(self, reason="Auto backup"):
+        if not self.is_enabled:
+            print("Backup skipped: not enabled")
+            return False
+        
+        if not self._has_data():
+            print("Backup skipped: no data")
+            return False
+        
+        try:
+            users_data = {}
+            pricing_data = {}
+            
+            if USERS_FILE.exists():
+                with open(USERS_FILE, 'r') as f:
+                    users_data = json.load(f)
+            
+            if PRICING_FILE.exists():
+                with open(PRICING_FILE, 'r') as f:
+                    pricing_data = json.load(f)
+            
+            backup_data = {
+                "timestamp": datetime.now().isoformat(),
+                "users": users_data,
+                "pricing": pricing_data,
+                "stats": {
+                    "users_count": len(users_data)
+                }
+            }
+            
+            json_str = json.dumps(backup_data, indent=2)
+            encoded = base64.b64encode(json_str.encode()).decode()
+            
+            # Check if file exists
+            api_url = self._get_api_url()
+            r = self._session.get(api_url, headers=self._headers)
+            file_sha = r.json().get('sha') if r.status_code == 200 else None
+            
+            payload = {
+                'message': f"{reason} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                'content': encoded,
+                'branch': self.branch
+            }
+            if file_sha:
+                payload['sha'] = file_sha
+            
+            r = self._session.put(api_url, headers=self._headers, json=payload, timeout=60)
+            
+            if r.status_code in (200, 201):
+                self._backup_count += 1
+                print(f"Backup successful (#{self._backup_count})")
+                return True
+            else:
+                print(f"Backup failed: {r.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"Backup error: {e}")
+            return False
+    
+    def restore(self):
+        if not self.is_enabled:
+            return False
+        
+        try:
+            api_url = self._get_api_url()
+            r = self._session.get(api_url, headers=self._headers, timeout=60)
+            
+            if r.status_code != 200:
+                print(f"No backup found: {r.status_code}")
+                return False
+            
+            content = r.json().get('content', '')
+            if not content:
+                return False
+            
+            json_str = base64.b64decode(content.replace('\n', '')).decode()
+            data = json.loads(json_str)
+            
+            if "users" in data:
+                with open(USERS_FILE, 'w') as f:
+                    json.dump(data["users"], f, indent=2)
+                print(f"Restored {len(data['users'])} users")
+            
+            if "pricing" in data:
+                with open(PRICING_FILE, 'w') as f:
+                    json.dump(data["pricing"], f, indent=2)
+                print("Restored pricing data")
+            
+            return True
+            
+        except Exception as e:
+            print(f"Restore error: {e}")
+            return False
+    
+    def get_status(self):
+        return {
+            "enabled": self.is_enabled,
+            "backup_count": self._backup_count,
+            "repo": f"{self.repo_owner}/{self.repo_name}",
+            "users": self._get_users_count()
+        }
+
+# Initialize backup system
 print("=" * 60)
-print("INITIALIZING NCK DEV VPS WITH GITHUB BACKUP")
+print("INITIALIZING NCK DEV VPS")
 print("=" * 60)
 
-try:
-    from github_backup import (
-        init_github_backup_force,
-        manual_backup,
-        get_backup_status,
-        has_data,
-        force_restore,
-        github_backup
-    )
-    print("GitHub backup module loaded successfully")
-except ImportError as e:
-    print(f"GitHub backup module not found: {e}")
-    def init_github_backup_force(*args, **kwargs): return None
-    def manual_backup(*args, **kwargs): return False
-    def get_backup_status(*args, **kwargs): return {"enabled": False}
-    def has_data(*args, **kwargs): return False
-    def force_restore(*args, **kwargs): return False
-    github_backup = None
+github_backup = GitHubBackupSystem(DATA_DIR, FILES_ROOT)
 
-# Initialize GitHub backup system
-print("Initializing GitHub backup system...")
-backup_system = init_github_backup_force(DATA_DIR, FILES_ROOT)
-
-if backup_system and backup_system.is_enabled:
-    print("GitHub backup system initialized successfully")
-else:
-    print("GitHub backup system not initialized - check environment variables")
+# Restore on startup if enabled
+if github_backup.is_enabled:
+    print("Attempting to restore from GitHub...")
+    restored = github_backup.restore()
+    if restored:
+        print("Restore successful!")
+    else:
+        print("No backup found - starting fresh")
+    print("Auto-backup thread started")
+    
+    def auto_backup_loop():
+        while True:
+            time.sleep(120)
+            if github_backup.is_enabled:
+                github_backup.backup("Auto backup")
+    
+    threading.Thread(target=auto_backup_loop, daemon=True).start()
 
 print("=" * 60)
+
+# ==================== HELPER FUNCTIONS ====================
+def manual_backup(reason="Manual backup"):
+    return github_backup.backup(reason)
+
+def get_backup_status():
+    return github_backup.get_status()
+
+def has_data():
+    return USERS_FILE.exists() or PRICING_FILE.exists()
+
+def force_restore():
+    return github_backup.restore()
 
 # ---------- storage ----------
 _lock = threading.Lock()
@@ -583,12 +743,12 @@ def admin_backup():
     def do_backup():
         success = manual_backup("Manual backup triggered by admin")
         if success:
-            flash("Versioned backup completed successfully!", "success")
+            flash("Backup completed successfully!", "success")
         else:
-            flash("Backup skipped (no data changes or safety check blocked)", "warning")
+            flash("Backup skipped (no data or not enabled)", "warning")
 
     threading.Thread(target=do_backup, daemon=True).start()
-    flash("Versioned backup started in background!", "success")
+    flash("Backup started in background!", "success")
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/admin/backup-status")
@@ -601,7 +761,7 @@ def admin_backup_status():
 @app.route("/admin/restore", methods=["POST"])
 @require_owner
 def admin_restore():
-    if not github_backup or not github_backup.is_enabled:
+    if not github_backup.is_enabled:
         flash("GitHub backup not configured!", "error")
         return redirect(url_for("owner_dashboard"))
 
@@ -609,37 +769,22 @@ def admin_restore():
     if success:
         flash("Restore successful! Data reloaded from GitHub.", "success")
     else:
-        flash("Restore failed. No backup found or empty backup.", "error")
+        flash("Restore failed. No backup found.", "error")
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/admin/force-restore", methods=["POST"])
 @require_owner
 def admin_force_restore():
-    if not github_backup or not github_backup.is_enabled:
+    if not github_backup.is_enabled:
         flash("GitHub backup not configured!", "error")
         return redirect(url_for("owner_dashboard"))
 
     manual_backup("Pre-restore backup")
-
     success = force_restore()
     if success:
-        flash("Force restore successful! Data reloaded from GitHub.", "success")
+        flash("Force restore successful!", "success")
     else:
         flash("Force restore failed.", "error")
-    return redirect(url_for("owner_dashboard"))
-
-@app.route("/admin/restore-version/<int:version>", methods=["POST"])
-@require_owner
-def admin_restore_version(version):
-    if not github_backup or not github_backup.is_enabled:
-        flash("GitHub backup not configured!", "error")
-        return redirect(url_for("owner_dashboard"))
-
-    success = force_restore(version)
-    if success:
-        flash(f"Restored version {version} successfully!", "success")
-    else:
-        flash(f"Failed to restore version {version}.", "error")
     return redirect(url_for("owner_dashboard"))
 
 # ---------- owner routes ----------
@@ -649,7 +794,6 @@ def owner_dashboard():
     users = load_users()
     now = time.time()
     base = request.host_url.rstrip("/")
-
     backup_info = get_backup_status()
 
     return render_template("owner.html",
@@ -880,7 +1024,7 @@ def debug():
             "GITHUB_REPO_OWNER": os.environ.get("GITHUB_REPO_OWNER"),
             "GITHUB_REPO_NAME": os.environ.get("GITHUB_REPO_NAME"),
         },
-        "github_backup_enabled": bool(github_backup and github_backup.is_enabled)
+        "github_backup_enabled": github_backup.is_enabled if github_backup else False
     })
 
 if __name__ == "__main__":
