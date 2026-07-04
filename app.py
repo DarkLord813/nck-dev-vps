@@ -81,7 +81,7 @@ print("=" * 60)
 print("INITIALIZING NCK DEV VPS WITH VERSIONED GITHUB BACKUP")
 print("=" * 60)
 
-# Get GitHub configuration from environment
+# Try to get from environment, but fallback is in github_backup.py
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO_OWNER = os.environ.get("GITHUB_REPO_OWNER", "")
 GITHUB_REPO_NAME = os.environ.get("GITHUB_REPO_NAME", "")

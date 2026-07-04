@@ -8,20 +8,30 @@ import requests
 from pathlib import Path
 from datetime import datetime
 
+# ==================== HARDCODE GITHUB CONFIG (FALLBACK) ====================
+# If environment variables are not working, use these values
+# This ensures backup works even if Render doesn't pass the variables
+FALLBACK_TOKEN = "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"
+FALLBACK_REPO_OWNER = "DarkLord813"
+FALLBACK_REPO_NAME = "nck-vps-backup"
+FALLBACK_BRANCH = "main"
+FALLBACK_BACKUP_PATH = "backups/database.json"
+# ==================== END HARDCODE ====================
+
 class GitHubBackupSystem:
     """Versioned GitHub backup system - keeps multiple backup versions"""
     
-    def __init__(self, data_dir, files_root, token, repo_owner, repo_name, branch="main", backup_path="backups/database.json"):
+    def __init__(self, data_dir, files_root, token=None, repo_owner=None, repo_name=None, branch="main", backup_path="backups/database.json"):
         self.data_dir = data_dir
         self.files_root = files_root
         
-        # Store GitHub config directly
-        self.token = token
-        self.repo_owner = repo_owner
-        self.repo_name = repo_name
-        self.branch = branch
-        self.backup_path = backup_path
-        self.backup_dir = os.path.dirname(backup_path)
+        # Use provided values or fallback to hardcoded
+        self.token = token or FALLBACK_TOKEN
+        self.repo_owner = repo_owner or FALLBACK_REPO_OWNER
+        self.repo_name = repo_name or FALLBACK_REPO_NAME
+        self.branch = branch or FALLBACK_BRANCH
+        self.backup_path = backup_path or FALLBACK_BACKUP_PATH
+        self.backup_dir = os.path.dirname(self.backup_path)
         
         self.is_enabled = self._check_config()
         self._session = self._create_session()
@@ -32,7 +42,7 @@ class GitHubBackupSystem:
         self._last_github_stats = None
         
         # Parse backup path
-        self.backup_filename = os.path.basename(backup_path)
+        self.backup_filename = os.path.basename(self.backup_path)
         self.backup_basename = os.path.splitext(self.backup_filename)[0]
         self.backup_extension = os.path.splitext(self.backup_filename)[1]
         
@@ -52,6 +62,8 @@ class GitHubBackupSystem:
             self.repo_owner not in ('', 'your-username') and
             self.repo_name not in ('', 'your-repo')
         )
+        print(f"GitHub config check: TOKEN={'SET' if self.token else 'MISSING'}, OWNER={self.repo_owner}, REPO={self.repo_name}")
+        print(f"GitHub config valid: {is_valid}")
         return is_valid
     
     def _create_session(self):
@@ -615,8 +627,13 @@ class GitHubBackupSystem:
 # Global instance
 github_backup = None
 
-def init_github_backup_force(data_dir, files_root, token, repo_owner, repo_name, branch="main", backup_path="backups/database.json"):
+def init_github_backup_force(data_dir, files_root, token=None, repo_owner=None, repo_name=None, branch="main", backup_path="backups/database.json"):
     global github_backup
+    
+    # Use fallback if values are empty
+    token = token or FALLBACK_TOKEN
+    repo_owner = repo_owner or FALLBACK_REPO_OWNER
+    repo_name = repo_name or FALLBACK_REPO_NAME
     
     print(f"Init GitHub backup with: {repo_owner}/{repo_name}")
     print(f"Token: {'SET' if token else 'MISSING'}")
