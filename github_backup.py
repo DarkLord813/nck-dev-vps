@@ -8,29 +8,19 @@ import requests
 from pathlib import Path
 from datetime import datetime
 
-# ==================== HARDCODE GITHUB CONFIG (FALLBACK) ====================
-# If environment variables are not working, use these values
-# This ensures backup works even if Render doesn't pass the variables
-FALLBACK_TOKEN = "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"
-FALLBACK_REPO_OWNER = "DarkLord813"
-FALLBACK_REPO_NAME = "nck-vps-backup"
-FALLBACK_BRANCH = "main"
-FALLBACK_BACKUP_PATH = "backups/database.json"
-# ==================== END HARDCODE ====================
-
 class GitHubBackupSystem:
     """Versioned GitHub backup system - keeps multiple backup versions"""
     
-    def __init__(self, data_dir, files_root, token=None, repo_owner=None, repo_name=None, branch="main", backup_path="backups/database.json"):
+    def __init__(self, data_dir, files_root):
         self.data_dir = data_dir
         self.files_root = files_root
         
-        # Use provided values or fallback to hardcoded
-        self.token = token or FALLBACK_TOKEN
-        self.repo_owner = repo_owner or FALLBACK_REPO_OWNER
-        self.repo_name = repo_name or FALLBACK_REPO_NAME
-        self.branch = branch or FALLBACK_BRANCH
-        self.backup_path = backup_path or FALLBACK_BACKUP_PATH
+        # Read from environment variables directly
+        self.token = os.environ.get("GITHUB_TOKEN", "")
+        self.repo_owner = os.environ.get("GITHUB_REPO_OWNER", "")
+        self.repo_name = os.environ.get("GITHUB_REPO_NAME", "")
+        self.branch = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
+        self.backup_path = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
         self.backup_dir = os.path.dirname(self.backup_path)
         
         self.is_enabled = self._check_config()
@@ -261,6 +251,7 @@ class GitHubBackupSystem:
             if r.status_code in (200, 201):
                 return True, file_path
             else:
+                print(f"Upload failed: {r.status_code} - {r.text[:200]}")
                 return False, f"Failed: {r.status_code}"
         except Exception as e:
             return False, str(e)
@@ -627,26 +618,20 @@ class GitHubBackupSystem:
 # Global instance
 github_backup = None
 
-def init_github_backup_force(data_dir, files_root, token=None, repo_owner=None, repo_name=None, branch="main", backup_path="backups/database.json"):
+def init_github_backup_force(data_dir, files_root):
     global github_backup
     
-    # Use fallback if values are empty
-    token = token or FALLBACK_TOKEN
-    repo_owner = repo_owner or FALLBACK_REPO_OWNER
-    repo_name = repo_name or FALLBACK_REPO_NAME
+    # Read from environment
+    token = os.environ.get("GITHUB_TOKEN", "")
+    repo_owner = os.environ.get("GITHUB_REPO_OWNER", "")
+    repo_name = os.environ.get("GITHUB_REPO_NAME", "")
+    branch = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
+    backup_path = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
     
     print(f"Init GitHub backup with: {repo_owner}/{repo_name}")
     print(f"Token: {'SET' if token else 'MISSING'}")
     
-    github_backup = GitHubBackupSystem(
-        data_dir=data_dir,
-        files_root=files_root,
-        token=token,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        branch=branch,
-        backup_path=backup_path
-    )
+    github_backup = GitHubBackupSystem(data_dir, files_root)
     
     if github_backup.is_enabled:
         print("GitHub backup initialized - FORCE RESTORE enabled on startup")
@@ -659,6 +644,7 @@ def init_github_backup_force(data_dir, files_root, token=None, repo_owner=None, 
         start_auto_backup()
     else:
         print("GitHub backup not configured - data will be lost on restart")
+        print("Please set: GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME")
     
     return github_backup
 

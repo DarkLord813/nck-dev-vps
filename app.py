@@ -78,20 +78,13 @@ app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
 # ---------- GitHub Backup Integration ----------
 print("=" * 60)
-print("INITIALIZING NCK DEV VPS WITH VERSIONED GITHUB BACKUP")
+print("INITIALIZING NCK DEV VPS WITH GITHUB BACKUP")
 print("=" * 60)
 
-# Try to get from environment, but fallback is in github_backup.py
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPO_OWNER = os.environ.get("GITHUB_REPO_OWNER", "")
-GITHUB_REPO_NAME = os.environ.get("GITHUB_REPO_NAME", "")
-GITHUB_BACKUP_BRANCH = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
-GITHUB_BACKUP_PATH = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
-
-print(f"GitHub Config from environment:")
-print(f"  GITHUB_TOKEN: {'SET' if GITHUB_TOKEN else 'MISSING'}")
-print(f"  GITHUB_REPO_OWNER: {GITHUB_REPO_OWNER or 'MISSING'}")
-print(f"  GITHUB_REPO_NAME: {GITHUB_REPO_NAME or 'MISSING'}")
+# Log environment variables status
+print(f"GITHUB_TOKEN: {'SET' if os.environ.get('GITHUB_TOKEN') else 'MISSING'}")
+print(f"GITHUB_REPO_OWNER: {os.environ.get('GITHUB_REPO_OWNER', 'MISSING')}")
+print(f"GITHUB_REPO_NAME: {os.environ.get('GITHUB_REPO_NAME', 'MISSING')}")
 
 try:
     from github_backup import (
@@ -103,7 +96,6 @@ try:
         github_backup
     )
     print("GitHub backup module loaded successfully")
-
 except ImportError as e:
     print(f"GitHub backup module not found: {e}")
     def init_github_backup_force(*args, **kwargs): return None
@@ -113,25 +105,14 @@ except ImportError as e:
     def force_restore(*args, **kwargs): return False
     github_backup = None
 
-# Initialize GitHub backup system with FORCE RESTORE on startup
-print("Initializing GitHub backup system with FORCE RESTORE...")
-backup_system = init_github_backup_force(
-    data_dir=DATA_DIR,
-    files_root=FILES_ROOT,
-    token=GITHUB_TOKEN,
-    repo_owner=GITHUB_REPO_OWNER,
-    repo_name=GITHUB_REPO_NAME,
-    branch=GITHUB_BACKUP_BRANCH,
-    backup_path=GITHUB_BACKUP_PATH
-)
+# Initialize GitHub backup system - it reads env vars internally
+print("Initializing GitHub backup system...")
+backup_system = init_github_backup_force(DATA_DIR, FILES_ROOT)
 
-if backup_system:
-    if hasattr(backup_system, '_restore_success') and backup_system._restore_success:
-        print("RESTORE SUCCESSFUL! Data restored from GitHub on startup")
-    else:
-        print("No backup found or restore failed - starting fresh")
+if backup_system and backup_system.is_enabled:
+    print("GitHub backup system initialized successfully")
 else:
-    print("GitHub backup system not fully initialized")
+    print("GitHub backup system not initialized - check environment variables")
 
 print("=" * 60)
 
