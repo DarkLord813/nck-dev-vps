@@ -85,7 +85,10 @@ class GitHubBackupSystem:
         
         # Read from environment variables
         self.token = os.environ.get("GITHUB_TOKEN", "")
-        self.repo_owner = os.environ.get("GITHUB_REPO_OWNER", "")
+        
+        # HARDCODED - GitHub repo owner (only this one)
+        self.repo_owner = "DarkLord813"
+        
         self.repo_name = os.environ.get("GITHUB_REPO_NAME", "")
         self.branch = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
         self.backup_path = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
@@ -181,7 +184,7 @@ class GitHubBackupSystem:
                 print(f"Backup successful (#{self._backup_count})")
                 return True
             else:
-                print(f"Backup failed: {r.status_code} - {r.text[:100]}")
+                print(f"Backup failed: {r.status_code}")
                 return False
                 
         except Exception as e:
@@ -1026,7 +1029,6 @@ def debug():
             "FLW_SECRET_KEY": "set" if os.environ.get("FLW_SECRET_KEY") else "missing",
             "FLW_ENCRYPTION_KEY": "set" if os.environ.get("FLW_ENCRYPTION_KEY") else "missing",
             "GITHUB_TOKEN": "set" if os.environ.get("GITHUB_TOKEN") else "missing",
-            "GITHUB_REPO_OWNER": os.environ.get("GITHUB_REPO_OWNER"),
             "GITHUB_REPO_NAME": os.environ.get("GITHUB_REPO_NAME"),
         },
         "github_backup_enabled": github_backup.is_enabled if github_backup else False
