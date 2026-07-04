@@ -95,7 +95,6 @@ print(f"  GITHUB_REPO_NAME: {GITHUB_REPO_NAME or 'MISSING'}")
 
 try:
     from github_backup import (
-        configure_github,
         init_github_backup_force,
         manual_backup,
         get_backup_status,
@@ -105,18 +104,8 @@ try:
     )
     print("GitHub backup module loaded successfully")
 
-    # Configure GitHub with environment values
-    configure_github(
-        token=GITHUB_TOKEN,
-        repo_owner=GITHUB_REPO_OWNER,
-        repo_name=GITHUB_REPO_NAME,
-        branch=GITHUB_BACKUP_BRANCH,
-        backup_path=GITHUB_BACKUP_PATH
-    )
-
 except ImportError as e:
     print(f"GitHub backup module not found: {e}")
-    def configure_github(*args, **kwargs): pass
     def init_github_backup_force(*args, **kwargs): return None
     def manual_backup(*args, **kwargs): return False
     def get_backup_status(*args, **kwargs): return {"enabled": False}
@@ -126,7 +115,15 @@ except ImportError as e:
 
 # Initialize GitHub backup system with FORCE RESTORE on startup
 print("Initializing GitHub backup system with FORCE RESTORE...")
-backup_system = init_github_backup_force(DATA_DIR, FILES_ROOT)
+backup_system = init_github_backup_force(
+    data_dir=DATA_DIR,
+    files_root=FILES_ROOT,
+    token=GITHUB_TOKEN,
+    repo_owner=GITHUB_REPO_OWNER,
+    repo_name=GITHUB_REPO_NAME,
+    branch=GITHUB_BACKUP_BRANCH,
+    backup_path=GITHUB_BACKUP_PATH
+)
 
 if backup_system:
     if hasattr(backup_system, '_restore_success') and backup_system._restore_success:

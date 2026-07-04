@@ -8,46 +8,21 @@ import requests
 from pathlib import Path
 from datetime import datetime
 
-# ==================== GITHUB CONFIGURATION ====================
-# This will be set by app.py
-GITHUB_TOKEN = ""
-GITHUB_REPO_OWNER = ""
-GITHUB_REPO_NAME = ""
-GITHUB_BACKUP_BRANCH = "main"
-GITHUB_BACKUP_PATH = "backups/database.json"
-GITHUB_BACKUP_DIR = "backups"
-# ==================== END GITHUB CONFIGURATION ====================
-
-def configure_github(token, repo_owner, repo_name, branch="main", backup_path="backups/database.json"):
-    """Configure GitHub backup settings from app.py"""
-    global GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME, GITHUB_BACKUP_BRANCH, GITHUB_BACKUP_PATH, GITHUB_BACKUP_DIR
-    
-    GITHUB_TOKEN = token
-    GITHUB_REPO_OWNER = repo_owner
-    GITHUB_REPO_NAME = repo_name
-    GITHUB_BACKUP_BRANCH = branch
-    GITHUB_BACKUP_PATH = backup_path
-    GITHUB_BACKUP_DIR = os.path.dirname(backup_path)
-    
-    print(f"GitHub configured: {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
-
-# Max number of versioned backups to keep
-MAX_BACKUP_VERSIONS = 10
-
-# Safety thresholds
-MIN_USER_THRESHOLD = 1
-
-# Global lock to prevent concurrent GitHub pushes
-_github_push_lock = threading.Lock()
-_last_backup_time = 0
-_MIN_BACKUP_INTERVAL = 30
-
 class GitHubBackupSystem:
     """Versioned GitHub backup system - keeps multiple backup versions"""
     
-    def __init__(self, data_dir, files_root):
+    def __init__(self, data_dir, files_root, token, repo_owner, repo_name, branch="main", backup_path="backups/database.json"):
         self.data_dir = data_dir
         self.files_root = files_root
+        
+        # Store GitHub config directly
+        self.token = token
+        self.repo_owner = repo_owner
+        self.repo_name = repo_name
+        self.branch = branch
+        self.backup_path = backup_path
+        self.backup_dir = os.path.dirname(backup_path)
+        
         self.is_enabled = self._check_config()
         self._session = self._create_session()
         self._last_backup_data = None
@@ -57,28 +32,26 @@ class GitHubBackupSystem:
         self._last_github_stats = None
         
         # Parse backup path
-        self.backup_dir = GITHUB_BACKUP_DIR
-        self.backup_filename = os.path.basename(GITHUB_BACKUP_PATH)
+        self.backup_filename = os.path.basename(backup_path)
         self.backup_basename = os.path.splitext(self.backup_filename)[0]
         self.backup_extension = os.path.splitext(self.backup_filename)[1]
         
         if self.is_enabled:
-            print(f"GitHub Backup enabled: {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
-            print(f"Backup path: {GITHUB_BACKUP_PATH}")
-            print(f"Versioned backups: {self.backup_basename}(1){self.backup_extension}, etc.")
+            print(f"GitHub Backup enabled: {self.repo_owner}/{self.repo_name}")
+            print(f"Backup path: {self.backup_path}")
         else:
             print("GitHub Backup disabled — data will be lost on restart")
+            print(f"Config: token={'SET' if self.token else 'MISSING'}, owner={self.repo_owner}, repo={self.repo_name}")
     
     def _check_config(self):
         """Check if GitHub backup is properly configured"""
         is_valid = bool(
-            GITHUB_TOKEN and
-            GITHUB_REPO_OWNER and
-            GITHUB_REPO_NAME and
-            GITHUB_REPO_OWNER not in ('', 'your-username') and
-            GITHUB_REPO_NAME not in ('', 'your-repo')
+            self.token and
+            self.repo_owner and
+            self.repo_name and
+            self.repo_owner not in ('', 'your-username') and
+            self.repo_name not in ('', 'your-repo')
         )
-        print(f"GitHub config check: TOKEN={'SET' if GITHUB_TOKEN else 'MISSING'}, OWNER={GITHUB_REPO_OWNER or 'MISSING'}, REPO={GITHUB_REPO_NAME or 'MISSING'}")
         return is_valid
     
     def _create_session(self):
@@ -94,12 +67,12 @@ class GitHubBackupSystem:
     @property
     def _headers(self):
         return {
-            'Authorization': f'token {GITHUB_TOKEN}',
+            'Authorization': f'token {self.token}',
             'Accept': 'application/vnd.github.v3+json'
         }
     
     def _get_file_api_url(self, file_path):
-        return f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents/{file_path}"
+        return f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{file_path}"
     
     def _get_versioned_path(self, version_number):
         if version_number == 0:
@@ -151,11 +124,11 @@ class GitHubBackupSystem:
             return self._last_github_stats
         
         try:
-            api_url = self._get_file_api_url(GITHUB_BACKUP_PATH)
+            api_url = self._get_file_api_url(self.backup_path)
             r = self._session.get(
                 api_url,
                 headers=self._headers,
-                params={'ref': GITHUB_BACKUP_BRANCH},
+                params={'ref': self.branch},
                 timeout=15
             )
             if r.status_code != 200:
@@ -192,7 +165,7 @@ class GitHubBackupSystem:
             r = self._session.get(
                 api_url,
                 headers=self._headers,
-                params={'ref': GITHUB_BACKUP_BRANCH},
+                params={'ref': self.branch},
                 timeout=15
             )
             if r.status_code != 200:
@@ -248,7 +221,7 @@ class GitHubBackupSystem:
             r = self._session.get(
                 api_url,
                 headers=self._headers,
-                params={'ref': GITHUB_BACKUP_BRANCH},
+                params={'ref': self.branch},
                 timeout=15
             )
             
@@ -261,7 +234,7 @@ class GitHubBackupSystem:
             payload = {
                 'message': commit_message,
                 'content': encoded,
-                'branch': GITHUB_BACKUP_BRANCH
+                'branch': self.branch
             }
             if file_sha:
                 payload['sha'] = file_sha
@@ -281,6 +254,7 @@ class GitHubBackupSystem:
             return False, str(e)
     
     def _cleanup_old_backups(self, backup_files):
+        MAX_BACKUP_VERSIONS = 10
         if len(backup_files) <= MAX_BACKUP_VERSIONS:
             return
         
@@ -293,7 +267,7 @@ class GitHubBackupSystem:
                 payload = {
                     'message': f'Removed old backup: {backup["name"]}',
                     'sha': backup['sha'],
-                    'branch': GITHUB_BACKUP_BRANCH
+                    'branch': self.branch
                 }
                 self._session.delete(
                     api_url,
@@ -306,6 +280,7 @@ class GitHubBackupSystem:
                 print(f"Failed to remove old backup: {e}")
     
     def _should_backup(self, local_stats):
+        MIN_USER_THRESHOLD = 1
         github_stats = self._get_github_stats()
         
         if not github_stats:
@@ -421,14 +396,15 @@ class GitHubBackupSystem:
             return None
     
     def backup_to_github(self, reason="Auto backup"):
-        global _last_backup_time
+        _last_backup_time = 0
+        _MIN_BACKUP_INTERVAL = 30
         
         if not self.is_enabled:
             return False
         
         local_stats = self._get_local_stats()
         
-        if local_stats['users_count'] < MIN_USER_THRESHOLD and not local_stats['has_data']:
+        if local_stats['users_count'] < 1 and not local_stats['has_data']:
             print(f"Skipping backup: Only {local_stats['users_count']} users")
             return False
         
@@ -448,7 +424,7 @@ class GitHubBackupSystem:
             print("Skipping backup: No data changes detected")
             return True
         
-        with _github_push_lock:
+        with threading.Lock():
             try:
                 backup_data = self.create_backup_data()
                 if not backup_data:
@@ -463,7 +439,7 @@ class GitHubBackupSystem:
                 
                 commit_msg = f"{reason} | {timestamp} | Users: {stats['users_count']} | Files: {stats['files_count']}"
                 success, result = self._upload_file_to_github(
-                    GITHUB_BACKUP_PATH,
+                    self.backup_path,
                     json_str,
                     commit_msg
                 )
@@ -523,14 +499,14 @@ class GitHubBackupSystem:
                 restore_name = f"{self.backup_basename}({version}){self.backup_extension}"
                 print(f"FORCE RESTORE: Fetching versioned backup: {restore_name}")
             else:
-                restore_path = GITHUB_BACKUP_PATH
+                restore_path = self.backup_path
                 restore_name = self.backup_filename
                 print("FORCE RESTORE: Fetching latest backup from GitHub...")
             
             r = self._session.get(
                 self._get_file_api_url(restore_path),
                 headers=self._headers,
-                params={'ref': GITHUB_BACKUP_BRANCH},
+                params={'ref': self.branch},
                 timeout=60
             )
             
@@ -639,9 +615,21 @@ class GitHubBackupSystem:
 # Global instance
 github_backup = None
 
-def init_github_backup_force(data_dir, files_root):
+def init_github_backup_force(data_dir, files_root, token, repo_owner, repo_name, branch="main", backup_path="backups/database.json"):
     global github_backup
-    github_backup = GitHubBackupSystem(data_dir, files_root)
+    
+    print(f"Init GitHub backup with: {repo_owner}/{repo_name}")
+    print(f"Token: {'SET' if token else 'MISSING'}")
+    
+    github_backup = GitHubBackupSystem(
+        data_dir=data_dir,
+        files_root=files_root,
+        token=token,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        branch=branch,
+        backup_path=backup_path
+    )
     
     if github_backup.is_enabled:
         print("GitHub backup initialized - FORCE RESTORE enabled on startup")
