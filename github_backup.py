@@ -15,13 +15,14 @@ class GitHubBackupSystem:
         self.data_dir = data_dir
         self.files_root = files_root
         
-        # Read from environment variables directly
+        # ========== READ FROM ENVIRONMENT VARIABLES ==========
         self.token = os.environ.get("GITHUB_TOKEN", "")
         self.repo_owner = os.environ.get("GITHUB_REPO_OWNER", "")
         self.repo_name = os.environ.get("GITHUB_REPO_NAME", "")
         self.branch = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
         self.backup_path = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
         self.backup_dir = os.path.dirname(self.backup_path)
+        # ====================================================
         
         self.is_enabled = self._check_config()
         self._session = self._create_session()
@@ -251,7 +252,6 @@ class GitHubBackupSystem:
             if r.status_code in (200, 201):
                 return True, file_path
             else:
-                print(f"Upload failed: {r.status_code} - {r.text[:200]}")
                 return False, f"Failed: {r.status_code}"
         except Exception as e:
             return False, str(e)

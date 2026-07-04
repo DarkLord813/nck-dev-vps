@@ -105,7 +105,7 @@ except ImportError as e:
     def force_restore(*args, **kwargs): return False
     github_backup = None
 
-# Initialize GitHub backup system - it reads env vars internally
+# Initialize GitHub backup system
 print("Initializing GitHub backup system...")
 backup_system = init_github_backup_force(DATA_DIR, FILES_ROOT)
 
