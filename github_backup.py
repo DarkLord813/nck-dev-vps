@@ -24,7 +24,26 @@ class GitHubBackupSystem:
         self.backup_dir = os.path.dirname(self.backup_path)
         # ====================================================
         
-        self.is_enabled = self._check_config()
+        # Print what we found
+        print(f"=== GITHUB BACKUP INIT ===")
+        print(f"Token: {'SET' if self.token else 'MISSING'}")
+        print(f"Repo Owner: {self.repo_owner}")
+        print(f"Repo Name: {self.repo_name}")
+        print(f"Branch: {self.branch}")
+        print(f"Backup Path: {self.backup_path}")
+        print(f"===========================")
+        
+        # Check if configured properly
+        self.is_enabled = bool(
+            self.token and
+            self.repo_owner and
+            self.repo_name and
+            self.repo_owner not in ('', 'your-username') and
+            self.repo_name not in ('', 'your-repo')
+        )
+        
+        print(f"GitHub Backup is {'ENABLED' if self.is_enabled else 'DISABLED'}")
+        
         self._session = self._create_session()
         self._last_backup_data = None
         self._backup_count = 0
@@ -38,24 +57,9 @@ class GitHubBackupSystem:
         self.backup_extension = os.path.splitext(self.backup_filename)[1]
         
         if self.is_enabled:
-            print(f"GitHub Backup enabled: {self.repo_owner}/{self.repo_name}")
             print(f"Backup path: {self.backup_path}")
         else:
             print("GitHub Backup disabled — data will be lost on restart")
-            print(f"Config: token={'SET' if self.token else 'MISSING'}, owner={self.repo_owner}, repo={self.repo_name}")
-    
-    def _check_config(self):
-        """Check if GitHub backup is properly configured"""
-        is_valid = bool(
-            self.token and
-            self.repo_owner and
-            self.repo_name and
-            self.repo_owner not in ('', 'your-username') and
-            self.repo_name not in ('', 'your-repo')
-        )
-        print(f"GitHub config check: TOKEN={'SET' if self.token else 'MISSING'}, OWNER={self.repo_owner}, REPO={self.repo_name}")
-        print(f"GitHub config valid: {is_valid}")
-        return is_valid
     
     def _create_session(self):
         """Create HTTP session with connection pooling"""
@@ -628,8 +632,13 @@ def init_github_backup_force(data_dir, files_root):
     branch = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
     backup_path = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
     
-    print(f"Init GitHub backup with: {repo_owner}/{repo_name}")
+    print(f"=== INIT GITHUB BACKUP ===")
     print(f"Token: {'SET' if token else 'MISSING'}")
+    print(f"Repo Owner: {repo_owner}")
+    print(f"Repo Name: {repo_name}")
+    print(f"Branch: {branch}")
+    print(f"Backup Path: {backup_path}")
+    print(f"==========================")
     
     github_backup = GitHubBackupSystem(data_dir, files_root)
     

@@ -81,11 +81,6 @@ print("=" * 60)
 print("INITIALIZING NCK DEV VPS WITH GITHUB BACKUP")
 print("=" * 60)
 
-# Log environment variables status
-print(f"GITHUB_TOKEN: {'SET' if os.environ.get('GITHUB_TOKEN') else 'MISSING'}")
-print(f"GITHUB_REPO_OWNER: {os.environ.get('GITHUB_REPO_OWNER', 'MISSING')}")
-print(f"GITHUB_REPO_NAME: {os.environ.get('GITHUB_REPO_NAME', 'MISSING')}")
-
 try:
     from github_backup import (
         init_github_backup_force,
@@ -130,7 +125,6 @@ def load_users():
 def save_users(u):
     with _lock:
         USERS_FILE.write_text(json.dumps(u, indent=2))
-    # Trigger GitHub backup after saving (versioned)
     threading.Thread(target=lambda: manual_backup("User data changed"), daemon=True).start()
 
 def load_pricing():
@@ -145,7 +139,6 @@ def load_pricing():
 def save_pricing(p):
     with _lock:
         PRICING_FILE.write_text(json.dumps(p, indent=2))
-    # Trigger GitHub backup after saving (versioned)
     threading.Thread(target=lambda: manual_backup("Pricing data changed"), daemon=True).start()
 
 def user_dir(username):
