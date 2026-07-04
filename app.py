@@ -227,7 +227,8 @@ class GitHubBackupSystem:
         return {
             "enabled": self.is_enabled,
             "backup_count": self._backup_count,
-            "repo": f"{self.repo_owner}/{self.repo_name}",
+            "repo_owner": self.repo_owner,
+            "repo_name": self.repo_name,
             "users": self._get_users_count()
         }
 
@@ -528,6 +529,10 @@ def register():
             flash("Password must be at least 6 characters!", "error")
             return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
 
+        if not email:
+            flash("Email is required for payment!", "error")
+            return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
+
         users = load_users()
         if username in users:
             flash("Username already exists! Please choose another.", "error")
@@ -756,6 +761,9 @@ def admin_backup():
 def admin_backup_status():
     status = get_backup_status()
     status['has_data'] = has_data()
+    # Add these for the frontend
+    status['repo_owner'] = os.environ.get("GITHUB_REPO_OWNER", "")
+    status['repo_name'] = os.environ.get("GITHUB_REPO_NAME", "")
     return jsonify(status)
 
 @app.route("/admin/restore", methods=["POST"])
@@ -802,7 +810,9 @@ def owner_dashboard():
         base_url=base,
         pricing=load_pricing(),
         currencies=SUPPORTED_CURRENCIES,
-        backup_info=backup_info
+        backup_info=backup_info,
+        github_repo_owner=os.environ.get("GITHUB_REPO_OWNER", ""),
+        github_repo_name=os.environ.get("GITHUB_REPO_NAME", "")
     )
 
 @app.route("/owner/create", methods=["POST"])
