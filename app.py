@@ -331,35 +331,53 @@ def start_process(username, filename):
     stop_process(username)
     udir = user_dir(username)
     fpath = udir / filename
+    
     if not fpath.exists():
         return False, "File not found"
+    
     ext = fpath.suffix.lower()
-
+    
+    # Check if there's a custom run command
+    run_cmd_file = udir / "run_command.txt"
+    
     users = load_users()
     user_data = users.get(username, {})
     subscription = user_data.get("subscription", "Basic")
-
+    
     if user_data.get("payment_status") != "paid":
         return False, "Please subscribe to a plan to run files"
-
+    
     if subscription == "Basic" and ext not in [".py"]:
         return False, "Basic plan only supports Python files"
-
-    if ext == ".py":
-        cmd = ["python", "-u", str(fpath)]
-    elif ext in (".js", ".mjs", ".cjs"):
-        cmd = ["node", str(fpath)]
-    elif ext == ".sh":
-        cmd = ["bash", str(fpath)]
+    
+    # Use custom run command if available
+    if run_cmd_file.exists():
+        try:
+            with open(run_cmd_file, 'r') as f:
+                run_command = f.read().strip()
+            cmd = run_command.split()
+        except:
+            cmd = None
     else:
-        return False, f"Unsupported file type: {ext}"
-
+        cmd = None
+    
+    # Default commands based on file type
+    if cmd is None:
+        if ext == ".py":
+            cmd = ["python", "-u", str(fpath)]
+        elif ext in (".js", ".mjs", ".cjs"):
+            cmd = ["node", str(fpath)]
+        elif ext == ".sh":
+            cmd = ["bash", str(fpath)]
+        else:
+            return False, f"Unsupported file type: {ext}"
+    
     memory_limit = {
         "Basic": "1g",
         "Pro": "2g",
         "Premium": "4g"
     }.get(subscription, "1g")
-
+    
     try:
         proc = subprocess.Popen(
             cmd, cwd=str(udir),
@@ -368,6 +386,9 @@ def start_process(username, filename):
         )
     except FileNotFoundError as e:
         return False, f"Runtime not installed: {e}"
+    except Exception as e:
+        return False, f"Error starting process: {e}"
+    
     logs = deque(maxlen=2000)
     logs.append(f"[start] {' '.join(cmd)}")
     logs.append(f"[subscription] {subscription} (Memory: {memory_limit})")
@@ -743,6 +764,183 @@ def payment_verify():
 def payment_cancel():
     flash("Payment cancelled. You can try again anytime.", "error")
     return redirect(url_for("pricing_page"))
+
+# ==================== REQUIREMENTS.TXT UPLOAD ====================
+@app.route("/upload-requirements", methods=["POST"])
+@require_user
+def upload_requirements():
+    u = current_user()
+    users = load_users()
+    
+    if users.get(u, {}).get("payment_status") != "paid":
+        flash("Please subscribe to a plan to upload requirements!", "error")
+        return redirect(url_for("user_dashboard"))
+    
+    udir = user_dir(u)
+    
+    if 'requirements' not in request.files:
+        flash("No file uploaded!", "error")
+        return redirect(url_for("user_dashboard"))
+    
+    file = request.files['requirements']
+    if file.filename == '' or not file.filename.endswith('.txt'):
+        flash("Please upload a valid requirements.txt file!", "error")
+        return redirect(url_for("user_dashboard"))
+    
+    # Save requirements.txt
+    name = secure_filename(file.filename)
+    file.save(udir / name)
+    
+    # Install requirements
+    try:
+        result = subprocess.run(
+            ['pip', 'install', '-r', str(udir / name)],
+            cwd=str(udir),
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        if result.returncode == 0:
+            flash(f"✅ Requirements installed successfully!", "success")
+        else:
+            flash(f"⚠️ Some packages failed to install: {result.stderr[:200]}", "warning")
+    except subprocess.TimeoutExpired:
+        flash("❌ Installation timed out. Some packages may be too large.", "error")
+    except Exception as e:
+        flash(f"❌ Error installing requirements: {str(e)}", "error")
+    
+    # Trigger backup
+    threading.Thread(target=lambda: manual_backup("Requirements uploaded"), daemon=True).start()
+    
+    return redirect(url_for("user_dashboard"))
+
+# ==================== ENVIRONMENT VARIABLES ====================
+@app.route("/get-env-vars")
+@require_user
+def get_env_vars():
+    u = current_user()
+    udir = user_dir(u)
+    env_file = udir / ".env"
+    
+    env_vars = []
+    if env_file.exists():
+        with open(env_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    parts = line.split('=', 1)
+                    if len(parts) == 2:
+                        env_vars.append({"key": parts[0].strip(), "value": parts[1].strip()})
+    
+    return jsonify({"env_vars": env_vars})
+
+@app.route("/save-env-vars", methods=["POST"])
+@require_user
+def save_env_vars():
+    u = current_user()
+    udir = user_dir(u)
+    env_file = udir / ".env"
+    
+    data = request.json
+    env_vars = data.get("env_vars", [])
+    
+    try:
+        with open(env_file, 'w') as f:
+            for env in env_vars:
+                f.write(f"{env['key']}={env['value']}\n")
+        
+        threading.Thread(target=lambda: manual_backup("Environment variables saved"), daemon=True).start()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/clear-env-vars", methods=["POST"])
+@require_user
+def clear_env_vars():
+    u = current_user()
+    udir = user_dir(u)
+    env_file = udir / ".env"
+    
+    try:
+        if env_file.exists():
+            env_file.unlink()
+        threading.Thread(target=lambda: manual_backup("Environment variables cleared"), daemon=True).start()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# ==================== GITHUB DEPLOY ====================
+@app.route("/deploy-github", methods=["POST"])
+@require_user
+def deploy_github():
+    u = current_user()
+    udir = user_dir(u)
+    
+    data = request.json
+    repo = data.get("repo")
+    branch = data.get("branch", "main")
+    run_command = data.get("run_command")
+    env_vars = data.get("env_vars", {})
+    
+    if not repo or not run_command:
+        return jsonify({"success": False, "error": "Repository URL and run command are required"}), 400
+    
+    try:
+        import tempfile
+        import shutil
+        
+        # Create a temp directory for cloning
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Clone the repo
+            clone_url = f"https://github.com/{repo}.git"
+            clone_cmd = ["git", "clone", "--depth", "1", clone_url, temp_dir]
+            
+            if branch != "main":
+                clone_cmd = ["git", "clone", "--depth", "1", "-b", branch, clone_url, temp_dir]
+            
+            result = subprocess.run(clone_cmd, capture_output=True, text=True, timeout=120)
+            
+            if result.returncode != 0:
+                return jsonify({"success": False, "error": f"Git clone failed: {result.stderr}"}), 400
+            
+            # Copy files to user directory
+            for item in Path(temp_dir).iterdir():
+                if item.is_file():
+                    shutil.copy2(item, udir / item.name)
+                elif item.is_dir() and item.name not in ['.git']:
+                    shutil.copytree(item, udir / item.name, dirs_exist_ok=True)
+            
+            # Save environment variables to .env file
+            if env_vars:
+                env_file = udir / ".env"
+                with open(env_file, 'w') as f:
+                    for key, value in env_vars.items():
+                        if key and value:
+                            f.write(f"{key}={value}\n")
+            
+            # Install requirements if exists
+            req_file = udir / "requirements.txt"
+            if req_file.exists():
+                subprocess.run(
+                    ['pip', 'install', '-r', str(req_file)],
+                    cwd=str(udir),
+                    capture_output=True,
+                    timeout=300
+                )
+            
+            # Save run command
+            with open(udir / "run_command.txt", 'w') as f:
+                f.write(run_command)
+            
+            threading.Thread(target=lambda: manual_backup(f"GitHub deploy: {repo}"), daemon=True).start()
+            
+            return jsonify({"success": True, "message": "Repository deployed successfully!"})
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({"success": False, "error": "Deployment timed out. Try again with a smaller repository."}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ---------- GitHub Backup Routes ----------
 @app.route("/admin/backup", methods=["POST"])
