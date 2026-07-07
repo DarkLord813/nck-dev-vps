@@ -28,11 +28,11 @@ FILES_ROOT = APP_DIR / "user_files"
 DATA_DIR.mkdir(exist_ok=True)
 FILES_ROOT.mkdir(exist_ok=True)
 
-# Owner credentials
+# ==================== OWNER CREDENTIALS ====================
 OWNER_USER = "DarkLord813"
-OWNER_PASS = "DarkLord813_codex"
+OWNER_PASS = "DarkLord813"  # Changed from DarkLord813_codex
 
-# ==================== DEFAULT PRICING MUST BE DEFINED FIRST ====================
+# ==================== DEFAULT PRICING ====================
 DEFAULT_PRICING = {
     "currency": "NGN",
     "contact": "Telegram: @rexoronsaye",
@@ -468,7 +468,7 @@ class GitHubBackupSystem:
         self._session = requests.Session()
         self._backup_count = 0
         self._last_backup_time = 0
-        self._min_backup_interval = 5  # 5 seconds minimum between backups
+        self._min_backup_interval = 5
         self._last_error = None
     
     @property
@@ -482,27 +482,23 @@ class GitHubBackupSystem:
         return f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{self.backup_path}"
     
     def _has_data(self):
-        """Check if there's any data to backup"""
         try:
-            # Always return True if we have files or if we're forcing
             users_file = self.data_dir / "users.json"
             pricing_file = self.data_dir / "pricing.json"
             projects_file = self.data_dir / "projects.json"
             
-            # Check if any file has content
             for file in [users_file, pricing_file, projects_file]:
                 if file.exists():
                     try:
                         content = json.loads(file.read_text())
-                        if content:  # Non-empty JSON
+                        if content:
                             return True
                     except:
                         pass
             
-            # If all files are empty but exist, we still have data structure
             return users_file.exists() or pricing_file.exists() or projects_file.exists()
         except:
-            return True  # Assume we have data if can't check
+            return True
     
     def _get_users_count(self):
         try:
@@ -516,9 +512,7 @@ class GitHubBackupSystem:
             return 0
     
     def backup(self, reason="Auto backup"):
-        """Create a backup to GitHub"""
         try:
-            # Check if enabled
             if not self.is_enabled:
                 self._last_error = "GitHub backup not enabled"
                 print("❌ Backup skipped: GitHub backup not enabled")
@@ -526,7 +520,6 @@ class GitHubBackupSystem:
             
             print(f"📤 Creating backup: {reason}")
             
-            # Collect all data
             users_data = {}
             pricing_data = {}
             projects_data = {}
@@ -552,7 +545,6 @@ class GitHubBackupSystem:
                 except:
                     pass
             
-            # Build backup data
             backup_data = {
                 "timestamp": datetime.now().isoformat(),
                 "version": "1.0",
@@ -566,18 +558,14 @@ class GitHubBackupSystem:
                 }
             }
             
-            # Convert to JSON and encode
             json_str = json.dumps(backup_data, indent=2)
             encoded = base64.b64encode(json_str.encode()).decode()
             
-            # Get GitHub API URL
             api_url = self._get_api_url()
             
-            # Check if file exists
             r = self._session.get(api_url, headers=self._headers)
             file_sha = r.json().get('sha') if r.status_code == 200 else None
             
-            # Prepare payload
             payload = {
                 'message': f"{reason} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Users: {len(users_data)}",
                 'content': encoded,
@@ -586,7 +574,6 @@ class GitHubBackupSystem:
             if file_sha:
                 payload['sha'] = file_sha
             
-            # Upload to GitHub
             r = self._session.put(api_url, headers=self._headers, json=payload, timeout=60)
             
             if r.status_code in (200, 201):
@@ -608,7 +595,6 @@ class GitHubBackupSystem:
             return False
     
     def restore(self):
-        """Restore from GitHub backup"""
         if not self.is_enabled:
             print("❌ Restore failed: GitHub backup not enabled")
             return False
@@ -670,7 +656,6 @@ print("=" * 60)
 
 github_backup = GitHubBackupSystem(DATA_DIR, FILES_ROOT)
 
-# Restore on startup if enabled
 if github_backup.is_enabled:
     print("🔄 Attempting to restore from GitHub...")
     restored = github_backup.restore()
@@ -679,12 +664,11 @@ if github_backup.is_enabled:
     else:
         print("ℹ️ No backup found - starting fresh")
     
-    # Create initial backup if no data exists
     print("📤 Creating initial backup...")
     if github_backup.backup("Initial backup on startup"):
         print("✅ Initial backup created!")
     else:
-        print("⚠️ Initial backup failed")
+        print("⚠️ Initial backup failed - check your GitHub token")
     
     print("🛡️ Auto-backup thread started (every 60 seconds)")
     
@@ -706,26 +690,22 @@ print("=" * 60)
 
 # ==================== BACKUP HELPER FUNCTIONS ====================
 def manual_backup(reason="Manual backup"):
-    """Trigger a manual backup"""
     if github_backup:
         return github_backup.backup(reason)
     return False
 
 def get_backup_status():
-    """Get backup status"""
     if github_backup:
         return github_backup.get_status()
     return {"enabled": False}
 
 def has_data():
-    """Check if there's any data"""
     try:
         return USERS_FILE.exists() or PRICING_FILE.exists() or PROJECTS_FILE.exists()
     except:
         return False
 
 def force_restore():
-    """Force restore from GitHub"""
     if github_backup:
         return github_backup.restore()
     return False
@@ -744,7 +724,6 @@ def load_users():
 def save_users(u):
     with _lock:
         USERS_FILE.write_text(json.dumps(u, indent=2))
-    # Trigger backup after saving
     threading.Thread(target=lambda: manual_backup("User data changed"), daemon=True).start()
 
 def load_pricing():
@@ -759,7 +738,6 @@ def load_pricing():
 def save_pricing(p):
     with _lock:
         PRICING_FILE.write_text(json.dumps(p, indent=2))
-    # Trigger backup after saving
     threading.Thread(target=lambda: manual_backup("Pricing data changed"), daemon=True).start()
 
 def user_dir(username):
@@ -1496,7 +1474,6 @@ def admin_backup():
 @app.route("/admin/backup-status")
 @require_owner
 def admin_backup_status():
-    """Get backup status"""
     status = get_backup_status()
     status['has_data'] = has_data()
     status['last_backup_time'] = github_backup._last_backup_time if github_backup else 0
@@ -1506,7 +1483,6 @@ def admin_backup_status():
 @app.route("/admin/restore", methods=["POST"])
 @require_owner
 def admin_restore():
-    """Restore from GitHub backup"""
     if not github_backup.is_enabled:
         flash("❌ GitHub backup not configured!", "error")
         return redirect(url_for("owner_dashboard"))
@@ -1521,7 +1497,6 @@ def admin_restore():
 @app.route("/admin/force-restore", methods=["POST"])
 @require_owner
 def admin_force_restore():
-    """Force restore even if local data exists"""
     if not github_backup.is_enabled:
         flash("❌ GitHub backup not configured!", "error")
         return redirect(url_for("owner_dashboard"))
