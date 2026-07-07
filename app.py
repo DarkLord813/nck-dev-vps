@@ -28,36 +28,11 @@ FILES_ROOT = APP_DIR / "user_files"
 DATA_DIR.mkdir(exist_ok=True)
 FILES_ROOT.mkdir(exist_ok=True)
 
-# Create default files if they don't exist
-if not USERS_FILE.exists():
-    USERS_FILE.write_text("{}")
-if not PRICING_FILE.exists():
-    PRICING_FILE.write_text(json.dumps(DEFAULT_PRICING, indent=2))
-if not PROJECTS_FILE.exists():
-    PROJECTS_FILE.write_text("{}")
-
 # Owner credentials
 OWNER_USER = "DarkLord813"
 OWNER_PASS = "DarkLord813_codex"
 
-# Flutterwave Configuration
-FLW_PUBLIC_KEY = os.environ.get("FLW_PUBLIC_KEY", "")
-FLW_SECRET_KEY = os.environ.get("FLW_SECRET_KEY", "")
-FLW_ENCRYPTION_KEY = os.environ.get("FLW_ENCRYPTION_KEY", "")
-FLW_ENABLED = bool(FLW_PUBLIC_KEY and FLW_SECRET_KEY and FLW_ENCRYPTION_KEY)
-
-# Flutterwave API endpoints
-FLW_INITIALIZE_URL = "https://api.flutterwave.com/v3/payments"
-FLW_VERIFY_URL = "https://api.flutterwave.com/v3/transactions/"
-
-# Supported currencies (4 currencies)
-SUPPORTED_CURRENCIES = {
-    "NGN": {"symbol": "₦", "name": "Nigerian Naira", "country": "Nigeria", "flag": "🇳🇬"},
-    "USD": {"symbol": "$", "name": "US Dollar", "country": "United States", "flag": "🇺🇸"},
-    "EUR": {"symbol": "€", "name": "Euro", "country": "Europe", "flag": "🇪🇺"},
-    "GBP": {"symbol": "£", "name": "British Pound", "country": "United Kingdom", "flag": "🇬🇧"},
-}
-
+# ==================== DEFAULT PRICING MUST BE DEFINED FIRST ====================
 DEFAULT_PRICING = {
     "currency": "NGN",
     "contact": "Telegram: @rexoronsaye",
@@ -87,6 +62,32 @@ DEFAULT_PRICING = {
         "EUR": {"Basic": "2.80", "Pro": "16.50", "Premium": "28.00"},
         "GBP": {"Basic": "2.40", "Pro": "14.50", "Premium": "24.00"},
     }
+}
+
+# Create default files if they don't exist
+if not USERS_FILE.exists():
+    USERS_FILE.write_text("{}")
+if not PRICING_FILE.exists():
+    PRICING_FILE.write_text(json.dumps(DEFAULT_PRICING, indent=2))
+if not PROJECTS_FILE.exists():
+    PROJECTS_FILE.write_text("{}")
+
+# Flutterwave Configuration
+FLW_PUBLIC_KEY = os.environ.get("FLW_PUBLIC_KEY", "")
+FLW_SECRET_KEY = os.environ.get("FLW_SECRET_KEY", "")
+FLW_ENCRYPTION_KEY = os.environ.get("FLW_ENCRYPTION_KEY", "")
+FLW_ENABLED = bool(FLW_PUBLIC_KEY and FLW_SECRET_KEY and FLW_ENCRYPTION_KEY)
+
+# Flutterwave API endpoints
+FLW_INITIALIZE_URL = "https://api.flutterwave.com/v3/payments"
+FLW_VERIFY_URL = "https://api.flutterwave.com/v3/transactions/"
+
+# Supported currencies (4 currencies)
+SUPPORTED_CURRENCIES = {
+    "NGN": {"symbol": "₦", "name": "Nigerian Naira", "country": "Nigeria", "flag": "🇳🇬"},
+    "USD": {"symbol": "$", "name": "US Dollar", "country": "United States", "flag": "🇺🇸"},
+    "EUR": {"symbol": "€", "name": "Euro", "country": "Europe", "flag": "🇪🇺"},
+    "GBP": {"symbol": "£", "name": "British Pound", "country": "United Kingdom", "flag": "🇬🇧"},
 }
 
 app = Flask(__name__)
