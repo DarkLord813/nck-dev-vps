@@ -6,10 +6,11 @@
     <div style="width:48px;height:48px;border-radius:12px;background:var(--grad);display:grid;place-items:center;font-size:22px">👑</div>
     <div>
       <h1 style="font-size:24px;margin:0">Owner Console</h1>
-      <p class="muted" style="margin:0">Manage users, subscriptions & pricing for NCK Dev VPS</p>
+      <p class="muted" style="margin:0">Manage users, subscriptions, pricing & security for NCK Dev VPS</p>
     </div>
   </div>
 
+  <!-- ==================== CREATE USER ==================== -->
   <div class="card">
     <h2>➕ Create User</h2>
     <form method="post" action="/owner/create" class="row">
@@ -17,47 +18,117 @@
       <input name="email" type="email" placeholder="Email" required>
       <input name="password" placeholder="Password" required>
       <select name="subscription" style="max-width:140px">
-        <option value="Basic">Basic (₦2,500/mo)</option>
-        <option value="Pro" selected>Pro (₦15,000/yr)</option>
-        <option value="Premium">Premium (₦25,000/yr)</option>
+        <option value="Basic">Basic (₦2,500/mo) - 1 project</option>
+        <option value="Pro" selected>Pro (₦15,000/yr) - 5 projects</option>
+        <option value="Premium">Premium (₦25,000/yr) - 20 projects</option>
       </select>
       <button class="btn btn-primary">Create User</button>
     </form>
   </div>
 
+  <!-- ==================== REGISTERED USERS ==================== -->
   <div class="card">
     <h2>👥 Registered Users ({{users|length}})</h2>
     {% if not users %}<p class="muted">No users yet. Create one above or users can self-register.</p>{% endif %}
     {% if users %}
     <div style="overflow-x:auto">
     <table>
-      <tr><th>User</th><th>Email</th><th>Subscription</th><th>Status</th><th>Created</th><th>Auto-login Link</th><th>Actions</th></tr>
+      <tr>
+        <th>User</th>
+        <th>Email</th>
+        <th>Subscription</th>
+        <th>Status</th>
+        <th>Created</th>
+        <th>Auto-login Link</th>
+        <th>Actions</th>
+      </tr>
       {% for name, u in users.items() %}
       <tr>
         <td><b>{{name}}</b></td>
         <td>{{u.email or 'N/A'}}</td>
         <td><span class="badge badge-subscription">{{u.subscription or 'Basic'}}</span></td>
-        <td>{% if u.payment_status == 'paid' %}<span class="badge badge-on">✅ Paid</span>{% else %}<span class="badge badge-off">⏳ Pending</span>{% endif %}</td>
+        <td>
+          {% if u.payment_status == 'paid' %}
+            <span class="badge badge-on">✅ Paid</span>
+          {% else %}
+            <span class="badge badge-off">⏳ Pending</span>
+          {% endif %}
+          {% if u.banned %}
+            <span class="badge badge-off" style="background:rgba(239,68,68,0.2);color:#fca5a5;border:1px solid rgba(239,68,68,0.35)">🚫 Banned</span>
+          {% endif %}
+        </td>
         <td class="muted" style="font-size:12px">{{ (u.created_at or 0)|int|string|truncate(20) }}</td>
         <td><a href="{{base_url}}/auto/{{u.token}}" target="_blank" style="font-size:11px;word-break:break-all">{{base_url}}/auto/{{u.token}}</a></td>
         <td>
-          <form class="inline" method="post" action="/owner/update_subscription/{{name}}">
-            <select name="subscription" style="padding:4px 8px;font-size:11px;width:100px">
-              <option value="Basic" {% if u.subscription == 'Basic' %}selected{% endif %}>Basic</option>
-              <option value="Pro" {% if u.subscription == 'Pro' %}selected{% endif %}>Pro</option>
-              <option value="Premium" {% if u.subscription == 'Premium' %}selected{% endif %}>Premium</option>
-            </select>
-            <button class="btn btn-ok btn-sm">Update</button>
-          </form>
-          <form class="inline" method="post" action="/owner/delete/{{name}}" onsubmit="return confirm('Delete {{name}}? This will remove all their files!')">
-            <button class="btn btn-danger btn-sm">Delete</button>
-          </form>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <div style="display:flex;gap:4px;flex-wrap:wrap">
+              <form class="inline" method="post" action="/owner/update_subscription/{{name}}">
+                <select name="subscription" style="padding:4px 8px;font-size:11px;width:100px">
+                  <option value="Basic" {% if u.subscription == 'Basic' %}selected{% endif %}>Basic</option>
+                  <option value="Pro" {% if u.subscription == 'Pro' %}selected{% endif %}>Pro</option>
+                  <option value="Premium" {% if u.subscription == 'Premium' %}selected{% endif %}>Premium</option>
+                </select>
+                <button class="btn btn-ok btn-sm">Update</button>
+              </form>
+              <form class="inline" method="post" action="/owner/delete/{{name}}" onsubmit="return confirm('Delete {{name}}? This will remove all their files!')">
+                <button class="btn btn-danger btn-sm">Delete</button>
+              </form>
+            </div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap">
+              {% if u.banned %}
+                <form class="inline" method="post" action="/owner/unban/{{name}}">
+                  <button class="btn btn-ok btn-sm" style="font-size:10px">🔓 Unban</button>
+                </form>
+              {% else %}
+                <form class="inline" method="post" action="/owner/ban/{{name}}" onsubmit="return confirm('Ban {{name}}? They will not be able to login or access their projects.')">
+                  <button class="btn btn-danger btn-sm" style="font-size:10px">🚫 Ban</button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
         </td>
       </tr>
       {% endfor %}
     </table>
     </div>
     {% endif %}
+  </div>
+
+  <!-- ==================== BULK USER MANAGEMENT ==================== -->
+  <div class="card">
+    <h2>⚡ Bulk User Actions</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <form method="post" action="/owner/unban-all" onsubmit="return confirm('Unban ALL users? This will restore access to all banned users.')">
+        <button class="btn btn-ok">🔓 Unban All Users</button>
+      </form>
+      <form method="post" action="/owner/ban-all" onsubmit="return confirm('⚠️ Ban ALL users? Only the owner will have access. This is a severe action!')">
+        <button class="btn btn-danger">🚫 Ban All Users</button>
+      </form>
+      <button class="btn btn-ghost" onclick="location.reload()">🔄 Refresh</button>
+    </div>
+    <p class="muted" style="margin-top:8px;font-size:12px">💡 Banning a user prevents them from logging in or accessing their projects. The owner is never banned.</p>
+  </div>
+
+  <!-- ==================== IP BLOCKING MANAGEMENT ==================== -->
+  <div class="card">
+    <h2>🛡️ IP Blocking Management</h2>
+    <p class="muted">Manage blocked IP addresses from rate limiting and brute force protection</p>
+    
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+      <form method="post" action="/admin/block-ip" class="row" style="flex:1">
+        <input name="ip" placeholder="IP Address to block" required style="flex:1;min-width:120px">
+        <input name="reason" placeholder="Reason" style="flex:1;min-width:120px">
+        <button class="btn btn-danger">🚫 Block IP</button>
+      </form>
+      <form method="post" action="/admin/unblock-all-ips">
+        <button class="btn btn-ok">🔓 Unblock All IPs</button>
+      </form>
+      <button class="btn btn-ghost" onclick="fetchBlockedIPs()">📊 View Blocked IPs</button>
+    </div>
+    
+    <div id="blocked-ips-list" style="background:rgba(10,14,32,0.5);border-radius:10px;padding:14px;border:1px solid var(--border);max-height:200px;overflow-y:auto">
+      <p class="muted" style="margin:0">Click "View Blocked IPs" to see currently blocked IPs.</p>
+    </div>
   </div>
 
   <!-- ==================== BACKUP PANEL ==================== -->
@@ -88,8 +159,8 @@
       <p class="muted" style="margin:0">Click "Check Status" to see backup information.</p>
     </div>
   </div>
-  <!-- ==================== END BACKUP PANEL ==================== -->
 
+  <!-- ==================== PRICING EDITOR ==================== -->
   <div class="card" id="pricing">
     <h2>💰 Pricing Plans Editor</h2>
     <p class="muted">These plans appear on the public Home & Pricing pages.</p>
@@ -120,6 +191,7 @@
 </div>
 
 <script>
+// ==================== ADD PLAN ====================
 function addPlan() {
   const d = document.createElement('div');
   d.className = 'row';
@@ -132,6 +204,7 @@ function addPlan() {
   document.getElementById('plans').appendChild(d);
 }
 
+// ==================== BACKUP FUNCTIONS ====================
 async function checkBackupStatus() {
     const statusDiv = document.getElementById('backup-status-display');
     statusDiv.innerHTML = '<p class="muted">Checking backup status...</p>';
@@ -177,7 +250,36 @@ async function checkBackupStatus() {
     }
 }
 
-// Auto-check on page load
+// ==================== IP BLOCKING FUNCTIONS ====================
+async function fetchBlockedIPs() {
+    const listDiv = document.getElementById('blocked-ips-list');
+    listDiv.innerHTML = '<p class="muted">Loading blocked IPs...</p>';
+    
+    try {
+        const response = await fetch('/admin/blocked-ips');
+        const data = await response.json();
+        
+        if (data.blocked_ips && data.blocked_ips.length > 0) {
+            let html = '<div style="display:flex;flex-direction:column;gap:6px">';
+            data.blocked_ips.forEach(ip => {
+                html += `
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:rgba(239,68,68,0.1);border-radius:6px;border:1px solid rgba(239,68,68,0.2)">
+                        <span><code style="color:#fca5a5">${ip.ip}</code> ${ip.reason ? `<span class="muted">- ${ip.reason}</span>` : ''}</span>
+                        <span class="muted" style="font-size:11px">Expires: ${ip.expires || 'Never'}</span>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            listDiv.innerHTML = html;
+        } else {
+            listDiv.innerHTML = '<p style="color:#6ee7b7">✅ No IPs currently blocked.</p>';
+        }
+    } catch (error) {
+        listDiv.innerHTML = `<p style="color:#fca5a5">Error fetching blocked IPs: ${error.message}</p>`;
+    }
+}
+
+// Auto-check backup status on page load
 document.addEventListener('DOMContentLoaded', function() {
     checkBackupStatus();
 });
