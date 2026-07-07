@@ -107,7 +107,6 @@ async function payWithFlutterwave(username, planName, email, currency) {
         }
         
         if (result.status) {
-            // Redirect to Flutterwave payment page
             window.location.href = result.link;
         }
     } catch (error) {
