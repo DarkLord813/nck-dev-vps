@@ -120,7 +120,6 @@
 </div>
 
 <script>
-// ==================== ADD PLAN ====================
 function addPlan() {
   const d = document.createElement('div');
   d.className = 'row';
@@ -133,7 +132,6 @@ function addPlan() {
   document.getElementById('plans').appendChild(d);
 }
 
-// ==================== BACKUP FUNCTIONS ====================
 async function checkBackupStatus() {
     const statusDiv = document.getElementById('backup-status-display');
     statusDiv.innerHTML = '<p class="muted">Checking backup status...</p>';
@@ -146,28 +144,17 @@ async function checkBackupStatus() {
             let statusHtml = `<p style="color:#6ee7b7">✅ GitHub backup is ACTIVE!</p>`;
             statusHtml += `<p class="muted">📦 Data exists: ${data.has_data ? '✅ Yes' : '❌ No'}</p>`;
             statusHtml += `<p class="muted">🔢 Total backups performed: <strong>${data.backup_count || 0}</strong></p>`;
+            statusHtml += `<p class="muted">📁 Repository: <strong>DarkLord813/${data.repo_name || 'nck-vps-backup'}</strong></p>`;
+            
+            if (data.users !== undefined) {
+                statusHtml += `<p class="muted">👥 Users in backup: <strong>${data.users}</strong></p>`;
+            }
             
             if (data.last_backup && data.last_backup !== 'Never') {
                 statusHtml += `<p class="muted">📅 Last backup: <strong>${new Date(data.last_backup).toLocaleString()}</strong></p>`;
             }
             
-            // Show backup files
-            if (data.backup_files && data.backup_files.length > 0) {
-                statusHtml += `<p class="muted" style="margin-top:10px"><b>📋 Backup Versions on GitHub:</b></p>`;
-                statusHtml += `<div style="max-height:150px;overflow-y:auto;font-size:12px;">`;
-                for (const file of data.backup_files) {
-                    const sizeKB = (file.size / 1024).toFixed(1);
-                    const isLatest = file.version === 0 ? '⭐' : '';
-                    statusHtml += `<p style="margin:2px 0;padding:2px 8px;background:rgba(10,14,32,0.3);border-radius:4px;">
-                        ${isLatest} <code>${file.name}</code> - ${sizeKB} KB
-                        ${file.version > 0 ? `<button class="btn btn-ghost btn-sm" onclick="restoreVersion(${file.version})" style="margin-left:8px;font-size:10px;">Restore</button>` : ''}
-                    </p>`;
-                }
-                statusHtml += `</div>`;
-            }
-            
             statusHtml += `<p class="muted" style="font-size:11px;margin-top:8px">
-                📁 Repository: ${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}<br>
                 🔄 Auto-restore: Enabled on every service restart<br>
                 📋 Versions kept: Last 10
             </p>`;
@@ -179,24 +166,14 @@ async function checkBackupStatus() {
                 <p class="muted">Set these environment variables:</p>
                 <ul style="color:var(--muted);font-size:13px;margin:5px 0">
                     <li><code>GITHUB_TOKEN</code> - Your GitHub Personal Access Token</li>
-                    <li><code>GITHUB_REPO_OWNER</code> - GitHub username</li>
-                    <li><code>GITHUB_REPO_NAME</code> - Repository name</li>
+                    <li><code>GITHUB_REPO_NAME</code> - Repository name (e.g., nck-vps-backup)</li>
                     <li><code>GITHUB_BACKUP_PATH</code> - e.g., <code>backups/database.json</code></li>
                 </ul>
+                <p class="muted" style="margin-top:5px">💡 <code>GITHUB_REPO_OWNER</code> is hardcoded as: <strong>DarkLord813</strong></p>
             `;
         }
     } catch (error) {
         statusDiv.innerHTML = `<p style="color:#fca5a5">Error checking backup status: ${error.message}</p>`;
-    }
-}
-
-async function restoreVersion(version) {
-    if (confirm(`⚠️ Restore version ${version}? This will REPLACE ALL current data!`)) {
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = `/admin/restore-version/${version}`;
-        document.body.appendChild(form);
-        form.submit();
     }
 }
 
