@@ -1,28 +1,36 @@
 import os, json, time, uuid, shutil, subprocess, threading, signal, secrets
 import requests
 import base64
+import hashlib
+import re
 from collections import deque
 from pathlib import Path
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import (
     Flask, request, redirect, url_for, session,
     render_template, jsonify, Response, send_from_directory, abort, flash
 )
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
+import ipaddress
+import hmac
+import random
+import string
 
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR / "data"
 USERS_FILE = DATA_DIR / "users.json"
 PRICING_FILE = DATA_DIR / "pricing.json"
+PROJECTS_FILE = DATA_DIR / "projects.json"
 FILES_ROOT = APP_DIR / "user_files"
 DATA_DIR.mkdir(exist_ok=True)
 FILES_ROOT.mkdir(exist_ok=True)
 
 # Owner credentials
 OWNER_USER = "DarkLord813"
-OWNER_PASS = "DarkLord813_codex"
+OWNER_PASS = "DarkLord813"
 
 # Flutterwave Configuration
 FLW_PUBLIC_KEY = os.environ.get("FLW_PUBLIC_KEY", "")
@@ -50,19 +58,19 @@ DEFAULT_PRICING = {
             "name": "Basic",
             "duration": "Monthly",
             "price": "2500",
-            "features": "Python only, 1GB RAM, Basic support"
+            "features": "Python only, 1GB RAM, Basic support, 1 project"
         },
         {
             "name": "Pro",
             "duration": "Yearly",
             "price": "15000",
-            "features": "Python/Node/Shell, pip/npm, 2GB RAM, Priority support"
+            "features": "Python/Node/Shell, pip/npm, 2GB RAM, Priority support, 5 projects"
         },
         {
             "name": "Premium",
             "duration": "Yearly",
             "price": "25000",
-            "features": "All features, 4GB RAM, Dedicated help, Best value!"
+            "features": "All features, 4GB RAM, Dedicated help, Best value! 20 projects"
         },
     ],
     "currency_pricing": {
@@ -77,40 +85,372 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
+# ==================== SECURITY SYSTEM ====================
+
+# Level 1: Rate Limiter
+class RateLimiter:
+    def __init__(self, max_requests=100, time_window=60):
+        self.max_requests = max_requests
+        self.time_window = time_window
+        self.requests = {}
+        self.blocked_ips = {}
+        self._lock = threading.Lock()
+    
+    def is_blocked(self, ip):
+        if ip in self.blocked_ips:
+            if time.time() < self.blocked_ips[ip]:
+                return True
+            else:
+                del self.blocked_ips[ip]
+        return False
+    
+    def block_ip(self, ip, duration=3600):
+        self.blocked_ips[ip] = time.time() + duration
+    
+    def check_rate_limit(self, ip, path):
+        with self._lock:
+            current_time = time.time()
+            if ip not in self.requests:
+                self.requests[ip] = []
+            
+            self.requests[ip] = [
+                (ts, p) for ts, p in self.requests[ip] 
+                if current_time - ts < self.time_window
+            ]
+            
+            if self.is_blocked(ip):
+                return False, "IP is blocked"
+            
+            if len(self.requests[ip]) >= self.max_requests:
+                self.block_ip(ip, 3600)
+                return False, "Rate limit exceeded"
+            
+            self.requests[ip].append((current_time, path))
+            return True, "OK"
+
+# Level 2: Brute Force Protection
+class BruteForceProtector:
+    def __init__(self, max_attempts=5, lockout_duration=900):
+        self.max_attempts = max_attempts
+        self.lockout_duration = lockout_duration
+        self.attempts = {}
+        self._lock = threading.Lock()
+    
+    def check_attempt(self, ip):
+        with self._lock:
+            current_time = time.time()
+            if ip not in self.attempts:
+                self.attempts[ip] = {'count': 0, 'reset_time': current_time + 60, 'blocked_until': 0}
+            
+            if current_time > self.attempts[ip]['reset_time']:
+                self.attempts[ip]['count'] = 0
+                self.attempts[ip]['reset_time'] = current_time + 60
+            
+            if self.attempts[ip]['blocked_until'] > current_time:
+                remaining = int(self.attempts[ip]['blocked_until'] - current_time)
+                return False, f"Blocked for {remaining} seconds"
+            
+            return True, "OK"
+    
+    def record_failure(self, ip):
+        with self._lock:
+            current_time = time.time()
+            if ip not in self.attempts:
+                self.attempts[ip] = {'count': 0, 'reset_time': current_time + 60, 'blocked_until': 0}
+            
+            self.attempts[ip]['count'] += 1
+            if self.attempts[ip]['count'] >= self.max_attempts:
+                self.attempts[ip]['blocked_until'] = current_time + self.lockout_duration
+                return True
+            return False
+    
+    def record_success(self, ip):
+        with self._lock:
+            if ip in self.attempts:
+                self.attempts[ip]['count'] = 0
+                self.attempts[ip]['blocked_until'] = 0
+                self.attempts[ip]['reset_time'] = time.time() + 60
+
+# Level 3: Input Validation
+class InputValidator:
+    @staticmethod
+    def sanitize_input(text):
+        if not text:
+            return text
+        dangerous = [';', '&&', '||', '|', '>', '<', '`', '$', '(', ')', '&', '\\', '/', '*', '?', '[', ']', '~', '!']
+        for char in dangerous:
+            text = text.replace(char, '')
+        if len(text) > 1000:
+            text = text[:1000]
+        return text.strip()
+    
+    @staticmethod
+    def validate_filename(filename):
+        if not filename:
+            return False, "Empty filename"
+        dangerous_extensions = ['.exe', '.bat', '.cmd', '.com', '.scr', '.vbs', '.ps1', '.jar']
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in dangerous_extensions:
+            return False, f"File type {ext} is not allowed"
+        if len(filename) > 255:
+            return False, "Filename too long"
+        if '..' in filename or '/' in filename or '\\' in filename:
+            return False, "Invalid filename"
+        return True, "OK"
+    
+    @staticmethod
+    def validate_command(command):
+        if not command:
+            return False, "Empty command"
+        allowed_commands = ['pip', 'pip3', 'npm']
+        parts = command.strip().split()
+        if not parts or parts[0] not in allowed_commands:
+            return False, "Only pip install and npm install are allowed"
+        if len(parts) < 3 or parts[1] != 'install':
+            return False, "Invalid command format"
+        dangerous = [';', '&&', '||', '|', '>', '<', '`', '$', '(', ')', '&', '\\']
+        for char in dangerous:
+            if char in command:
+                return False, f"Dangerous character '{char}' detected"
+        return True, "OK"
+
+# Level 4: Session Security
+class SessionSecurity:
+    @staticmethod
+    def generate_csrf_token():
+        return secrets.token_hex(32)
+    
+    @staticmethod
+    def verify_csrf_token(session_token, request_token):
+        if not session_token or not request_token:
+            return False
+        return hmac.compare_digest(session_token, request_token)
+
+# Level 5: File Upload Security
+class FileUploadSecurity:
+    def __init__(self):
+        self.max_file_size = 100 * 1024 * 1024
+        self.allowed_extensions = {'.py', '.js', '.sh', '.txt', '.json', '.html', '.css', '.md', '.yml', '.yaml', '.conf', '.ini', '.cfg', '.xml'}
+        self.banned_extensions = {'.exe', '.bat', '.cmd', '.com', '.scr', '.vbs', '.ps1', '.jar', '.war', '.zip', '.rar', '.7z', '.tar', '.gz'}
+    
+    def validate_file(self, file):
+        if not file:
+            return False, "No file provided"
+        filename = file.filename
+        if not filename:
+            return False, "Empty filename"
+        file.seek(0, 2)
+        size = file.tell()
+        file.seek(0)
+        if size > self.max_file_size:
+            return False, f"File too large. Max size: {self.max_file_size//(1024*1024)}MB"
+        if size == 0:
+            return False, "Empty file"
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in self.banned_extensions:
+            return False, f"File type {ext} is not allowed"
+        if '..' in filename or '/' in filename or '\\' in filename:
+            return False, "Invalid filename"
+        if filename.startswith('.'):
+            return False, "Hidden files are not allowed"
+        return True, "OK"
+
+# Level 6: Request Validator
+class RequestValidator:
+    def __init__(self):
+        self.banned_ips = {}
+        self.whitelisted_ips = set()
+    
+    def get_client_ip(self):
+        forwarded = request.headers.get('X-Forwarded-For')
+        if forwarded:
+            return forwarded.split(',')[0].strip()
+        return request.remote_addr
+
+# Initialize security
+rate_limiter = RateLimiter()
+brute_force = BruteForceProtector()
+input_validator = InputValidator()
+session_security = SessionSecurity()
+file_upload_security = FileUploadSecurity()
+request_validator = RequestValidator()
+
+# ==================== MULTI-PROJECT SYSTEM ====================
+
+def load_projects():
+    if not PROJECTS_FILE.exists():
+        return {}
+    try:
+        return json.loads(PROJECTS_FILE.read_text())
+    except Exception:
+        return {}
+
+def save_projects(projects):
+    with _lock:
+        PROJECTS_FILE.write_text(json.dumps(projects, indent=2))
+
+def get_user_projects(username):
+    projects = load_projects()
+    return projects.get(username, {})
+
+def get_project(username, project_id):
+    projects = load_projects()
+    return projects.get(username, {}).get(project_id)
+
+def create_project(username, project_name, description=""):
+    projects = load_projects()
+    if username not in projects:
+        projects[username] = {}
+    project_id = secrets.token_hex(8)
+    projects[username][project_id] = {
+        "id": project_id,
+        "name": project_name,
+        "description": description,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "files": [],
+        "env_vars": {},
+        "run_command": "",
+        "requirements": "",
+        "is_running": False,
+        "pid": None
+    }
+    save_projects(projects)
+    project_dir = FILES_ROOT / username / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    return project_id
+
+def delete_project(username, project_id):
+    projects = load_projects()
+    if username in projects and project_id in projects[username]:
+        stop_project_process(username, project_id)
+        project_dir = FILES_ROOT / username / project_id
+        if project_dir.exists():
+            shutil.rmtree(project_dir, ignore_errors=True)
+        del projects[username][project_id]
+        save_projects(projects)
+        return True
+    return False
+
+# ==================== PROJECT PROCESS MANAGEMENT ====================
+PROJECT_PROCS = {}
+
+def start_project_process(username, project_id):
+    stop_project_process(username, project_id)
+    project = get_project(username, project_id)
+    if not project:
+        return False, "Project not found"
+    project_dir = FILES_ROOT / username / project_id
+    run_command = project.get("run_command", "")
+    if not run_command:
+        return False, "No run command set"
+    main_file = project_dir / "main.py"
+    if not main_file.exists():
+        return False, "main.py not found in project"
+    try:
+        env = os.environ.copy()
+        for key, value in project.get("env_vars", {}).items():
+            env[key] = value
+        proc = subprocess.Popen(
+            run_command.split(),
+            cwd=str(project_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            env=env
+        )
+        project_key = f"{username}:{project_id}"
+        PROJECT_PROCS[project_key] = {
+            "proc": proc,
+            "logs": deque(maxlen=2000),
+            "project_id": project_id,
+            "username": username,
+            "started": time.time()
+        }
+        projects = load_projects()
+        if username in projects and project_id in projects[username]:
+            projects[username][project_id]["is_running"] = True
+            projects[username][project_id]["pid"] = proc.pid
+            save_projects(projects)
+        t = threading.Thread(target=_read_project_logs, args=(username, project_id, proc), daemon=True)
+        t.start()
+        PROJECT_PROCS[project_key]["thread"] = t
+        return True, "Project started"
+    except Exception as e:
+        return False, f"Error starting project: {str(e)}"
+
+def stop_project_process(username, project_id):
+    project_key = f"{username}:{project_id}"
+    if project_key in PROJECT_PROCS:
+        proc = PROJECT_PROCS[project_key]["proc"]
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            except:
+                pass
+        del PROJECT_PROCS[project_key]
+    projects = load_projects()
+    if username in projects and project_id in projects[username]:
+        projects[username][project_id]["is_running"] = False
+        projects[username][project_id]["pid"] = None
+        save_projects(projects)
+    return True
+
+def _read_project_logs(username, project_id, proc):
+    project_key = f"{username}:{project_id}"
+    if project_key not in PROJECT_PROCS:
+        return
+    buf = PROJECT_PROCS[project_key]["logs"]
+    try:
+        for line in iter(proc.stdout.readline, b""):
+            try:
+                txt = line.decode("utf-8", errors="replace").rstrip()
+            except:
+                txt = str(line)
+            buf.append(f"[{time.strftime('%H:%M:%S')}] {txt}")
+    except Exception as e:
+        buf.append(f"[error] {e}")
+    finally:
+        buf.append(f"[exit] process ended with code {proc.poll()}")
+        projects = load_projects()
+        if username in projects and project_id in projects[username]:
+            projects[username][project_id]["is_running"] = False
+            projects[username][project_id]["pid"] = None
+            save_projects(projects)
+
+def get_project_logs(username, project_id):
+    project_key = f"{username}:{project_id}"
+    if project_key not in PROJECT_PROCS:
+        return []
+    return list(PROJECT_PROCS[project_key]["logs"])
+
+def is_project_running(username, project_id):
+    project_key = f"{username}:{project_id}"
+    if project_key in PROJECT_PROCS:
+        return PROJECT_PROCS[project_key]["proc"].poll() is None
+    return False
+
 # ==================== GITHUB BACKUP SYSTEM ====================
 class GitHubBackupSystem:
     def __init__(self, data_dir, files_root):
         self.data_dir = data_dir
         self.files_root = files_root
-        
-        # Read from environment variables
         self.token = os.environ.get("GITHUB_TOKEN", "")
-        
-        # HARDCODED - GitHub repo owner (only this one)
         self.repo_owner = "DarkLord813"
-        
         self.repo_name = os.environ.get("GITHUB_REPO_NAME", "")
         self.branch = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
         self.backup_path = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
-        
-        # Check if configured
         self.is_enabled = bool(self.token and self.repo_owner and self.repo_name)
-        
-        print(f"=== GITHUB BACKUP ===")
-        print(f"Enabled: {self.is_enabled}")
-        print(f"Repo: {self.repo_owner}/{self.repo_name}")
-        print(f"Token: {'SET' if self.token else 'MISSING'}")
-        print(f"=====================")
-        
         self._session = requests.Session()
         self._backup_count = 0
     
     @property
     def _headers(self):
-        return {
-            'Authorization': f'token {self.token}',
-            'Accept': 'application/vnd.github.v3+json'
-        }
+        return {'Authorization': f'token {self.token}', 'Accept': 'application/vnd.github.v3+json'}
     
     def _get_api_url(self):
         return f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{self.backup_path}"
@@ -118,7 +458,8 @@ class GitHubBackupSystem:
     def _has_data(self):
         users_file = self.data_dir / "users.json"
         pricing_file = self.data_dir / "pricing.json"
-        return users_file.exists() or pricing_file.exists()
+        projects_file = self.data_dir / "projects.json"
+        return users_file.exists() or pricing_file.exists() or projects_file.exists()
     
     def _get_users_count(self):
         try:
@@ -128,65 +469,48 @@ class GitHubBackupSystem:
                     data = json.load(f)
                     return len(data)
             return 0
-        except Exception:
+        except:
             return 0
     
     def backup(self, reason="Auto backup"):
         if not self.is_enabled:
-            print("Backup skipped: not enabled")
             return False
-        
         if not self._has_data():
-            print("Backup skipped: no data")
             return False
-        
         try:
-            users_data = {}
-            pricing_data = {}
-            
+            users_data, pricing_data, projects_data = {}, {}, {}
             if USERS_FILE.exists():
                 with open(USERS_FILE, 'r') as f:
                     users_data = json.load(f)
-            
             if PRICING_FILE.exists():
                 with open(PRICING_FILE, 'r') as f:
                     pricing_data = json.load(f)
-            
+            if PROJECTS_FILE.exists():
+                with open(PROJECTS_FILE, 'r') as f:
+                    projects_data = json.load(f)
             backup_data = {
                 "timestamp": datetime.now().isoformat(),
                 "users": users_data,
                 "pricing": pricing_data,
+                "projects": projects_data,
                 "stats": {
-                    "users_count": len(users_data)
+                    "users_count": len(users_data),
+                    "projects_count": sum(len(p) for p in projects_data.values()) if projects_data else 0
                 }
             }
-            
             json_str = json.dumps(backup_data, indent=2)
             encoded = base64.b64encode(json_str.encode()).decode()
-            
-            # Check if file exists
             api_url = self._get_api_url()
             r = self._session.get(api_url, headers=self._headers)
             file_sha = r.json().get('sha') if r.status_code == 200 else None
-            
-            payload = {
-                'message': f"{reason} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                'content': encoded,
-                'branch': self.branch
-            }
+            payload = {'message': f"{reason} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 'content': encoded, 'branch': self.branch}
             if file_sha:
                 payload['sha'] = file_sha
-            
             r = self._session.put(api_url, headers=self._headers, json=payload, timeout=60)
-            
             if r.status_code in (200, 201):
                 self._backup_count += 1
-                print(f"Backup successful (#{self._backup_count})")
                 return True
-            else:
-                print(f"Backup failed: {r.status_code}")
-                return False
-                
+            return False
         except Exception as e:
             print(f"Backup error: {e}")
             return False
@@ -194,34 +518,26 @@ class GitHubBackupSystem:
     def restore(self):
         if not self.is_enabled:
             return False
-        
         try:
             api_url = self._get_api_url()
             r = self._session.get(api_url, headers=self._headers, timeout=60)
-            
             if r.status_code != 200:
-                print(f"No backup found: {r.status_code}")
                 return False
-            
             content = r.json().get('content', '')
             if not content:
                 return False
-            
             json_str = base64.b64decode(content.replace('\n', '')).decode()
             data = json.loads(json_str)
-            
             if "users" in data:
                 with open(USERS_FILE, 'w') as f:
                     json.dump(data["users"], f, indent=2)
-                print(f"Restored {len(data['users'])} users")
-            
             if "pricing" in data:
                 with open(PRICING_FILE, 'w') as f:
                     json.dump(data["pricing"], f, indent=2)
-                print("Restored pricing data")
-            
+            if "projects" in data:
+                with open(PROJECTS_FILE, 'w') as f:
+                    json.dump(data["projects"], f, indent=2)
             return True
-            
         except Exception as e:
             print(f"Restore error: {e}")
             return False
@@ -236,33 +552,16 @@ class GitHubBackupSystem:
         }
 
 # Initialize backup system
-print("=" * 60)
-print("INITIALIZING NCK DEV VPS")
-print("=" * 60)
-
 github_backup = GitHubBackupSystem(DATA_DIR, FILES_ROOT)
-
-# Restore on startup if enabled
 if github_backup.is_enabled:
-    print("Attempting to restore from GitHub...")
     restored = github_backup.restore()
-    if restored:
-        print("Restore successful!")
-    else:
-        print("No backup found - starting fresh")
-    print("Auto-backup thread started")
-    
     def auto_backup_loop():
         while True:
             time.sleep(120)
             if github_backup.is_enabled:
                 github_backup.backup("Auto backup")
-    
     threading.Thread(target=auto_backup_loop, daemon=True).start()
 
-print("=" * 60)
-
-# ==================== HELPER FUNCTIONS ====================
 def manual_backup(reason="Manual backup"):
     return github_backup.backup(reason)
 
@@ -270,7 +569,7 @@ def get_backup_status():
     return github_backup.get_status()
 
 def has_data():
-    return USERS_FILE.exists() or PRICING_FILE.exists()
+    return USERS_FILE.exists() or PRICING_FILE.exists() or PROJECTS_FILE.exists()
 
 def force_restore():
     return github_backup.restore()
@@ -310,162 +609,6 @@ def user_dir(username):
     d.mkdir(parents=True, exist_ok=True)
     return d
 
-# ---------- process manager ----------
-PROCS = {}
-
-def _reader(username, proc):
-    buf = PROCS[username]["logs"]
-    try:
-        for line in iter(proc.stdout.readline, b""):
-            try:
-                txt = line.decode("utf-8", errors="replace").rstrip()
-            except Exception:
-                txt = str(line)
-            buf.append(f"[{time.strftime('%H:%M:%S')}] {txt}")
-    except Exception as e:
-        buf.append(f"[reader-error] {e}")
-    finally:
-        buf.append(f"[exit] process ended with code {proc.poll()}")
-
-def start_process(username, filename):
-    stop_process(username)
-    udir = user_dir(username)
-    fpath = udir / filename
-    
-    if not fpath.exists():
-        return False, "File not found"
-    
-    ext = fpath.suffix.lower()
-    
-    # Check if there's a custom run command
-    run_cmd_file = udir / "run_command.txt"
-    
-    users = load_users()
-    user_data = users.get(username, {})
-    subscription = user_data.get("subscription", "Basic")
-    
-    if user_data.get("payment_status") != "paid":
-        return False, "Please subscribe to a plan to run files"
-    
-    if subscription == "Basic" and ext not in [".py"]:
-        return False, "Basic plan only supports Python files"
-    
-    # Use custom run command if available
-    if run_cmd_file.exists():
-        try:
-            with open(run_cmd_file, 'r') as f:
-                run_command = f.read().strip()
-            cmd = run_command.split()
-        except:
-            cmd = None
-    else:
-        cmd = None
-    
-    # Default commands based on file type
-    if cmd is None:
-        if ext == ".py":
-            cmd = ["python", "-u", str(fpath)]
-        elif ext in (".js", ".mjs", ".cjs"):
-            cmd = ["node", str(fpath)]
-        elif ext == ".sh":
-            cmd = ["bash", str(fpath)]
-        else:
-            return False, f"Unsupported file type: {ext}"
-    
-    memory_limit = {
-        "Basic": "1g",
-        "Pro": "2g",
-        "Premium": "4g"
-    }.get(subscription, "1g")
-    
-    try:
-        proc = subprocess.Popen(
-            cmd, cwd=str(udir),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            bufsize=1,
-        )
-    except FileNotFoundError as e:
-        return False, f"Runtime not installed: {e}"
-    except Exception as e:
-        return False, f"Error starting process: {e}"
-    
-    logs = deque(maxlen=2000)
-    logs.append(f"[start] {' '.join(cmd)}")
-    logs.append(f"[subscription] {subscription} (Memory: {memory_limit})")
-    PROCS[username] = {"proc": proc, "logs": logs, "file": filename, "subscription": subscription}
-    t = threading.Thread(target=_reader, args=(username, proc), daemon=True)
-    t.start()
-    PROCS[username]["thread"] = t
-    return True, "started"
-
-def stop_process(username):
-    info = PROCS.get(username)
-    if not info:
-        return False
-    p = info["proc"]
-    if p.poll() is None:
-        try:
-            p.terminate()
-            try:
-                p.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                p.kill()
-        except Exception:
-            pass
-        info["logs"].append("[stop] process terminated")
-    return True
-
-def is_running(username):
-    info = PROCS.get(username)
-    return bool(info and info["proc"].poll() is None)
-
-def get_logs(username):
-    info = PROCS.get(username)
-    if not info:
-        return []
-    return list(info["logs"])
-
-# ---------- install module ----------
-INSTALL_LOGS = {}
-
-def run_install(username, command):
-    users = load_users()
-    user_data = users.get(username, {})
-    subscription = user_data.get("subscription", "Basic")
-
-    if user_data.get("payment_status") != "paid":
-        return False, "Please subscribe to a plan to install modules"
-
-    parts = command.strip().split()
-    if not parts:
-        return False, "empty command"
-
-    if subscription == "Basic" and parts[0] in ["pip", "pip3"]:
-        return False, "Basic plan doesn't support pip install. Upgrade to Pro or Premium."
-
-    if parts[0] not in ("pip", "pip3", "npm"):
-        return False, "Only 'pip install <pkg>' or 'npm install <pkg>' allowed"
-    if len(parts) < 3 or parts[1] != "install":
-        return False, "Format: pip install <module>  OR  npm install <module>"
-    if any(c in command for c in [";", "&", "|", "`", "$(", ">"]):
-        return False, "Invalid characters"
-
-    logs = INSTALL_LOGS.setdefault(username, deque(maxlen=1000))
-    logs.append(f"[install] $ {command}")
-    cwd = str(user_dir(username))
-    def worker():
-        try:
-            p = subprocess.Popen(parts, cwd=cwd,
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            for line in iter(p.stdout.readline, b""):
-                logs.append(line.decode("utf-8", errors="replace").rstrip())
-            p.wait()
-            logs.append(f"[install] finished with code {p.returncode}")
-        except Exception as e:
-            logs.append(f"[install-error] {e}")
-    threading.Thread(target=worker, daemon=True).start()
-    return True, "installing"
-
 # ---------- auth ----------
 def is_owner():
     return session.get("role") == "owner"
@@ -478,6 +621,8 @@ def user_valid(username):
     u = users.get(username)
     if not u:
         return False, "User not found"
+    if u.get("banned", False):
+        return False, "User is banned"
     return True, u
 
 def require_owner(f):
@@ -573,6 +718,7 @@ def register():
             "token": secrets.token_urlsafe(16),
             "payment_status": "pending",
             "email": email,
+            "banned": False,
         }
         save_users(users)
         user_dir(username)
@@ -588,16 +734,23 @@ def login():
     if request.method == "POST":
         u = request.form.get("username", "").strip()
         p = request.form.get("password", "")
-
+        
+        users = load_users()
+        if u in users and users[u].get("banned", False):
+            error = "❌ Your account has been banned. Contact the owner for support."
+            return render_template("login.html", error=error)
+        
         if u == OWNER_USER and p == OWNER_PASS:
             session.clear()
             session["role"] = "owner"
             session["username"] = u
             return redirect(url_for("owner_dashboard"))
-
-        users = load_users()
+        
         info = users.get(u)
         if info and check_password_hash(info["password"], p):
+            if info.get("banned", False):
+                error = "❌ Your account has been banned. Contact the owner for support."
+                return render_template("login.html", error=error)
             ok, _ = user_valid(u)
             if not ok:
                 error = "Account invalid"
@@ -620,6 +773,8 @@ def auto_login(token):
     users = load_users()
     for uname, info in users.items():
         if info.get("token") == token:
+            if info.get("banned", False):
+                return "Account is banned", 403
             ok, _ = user_valid(uname)
             if not ok:
                 return "Account invalid", 403
@@ -633,74 +788,53 @@ def auto_login(token):
 @app.route("/initialize-payment", methods=["POST"])
 def initialize_payment():
     if not FLW_ENABLED:
-        return jsonify({"error": "Flutterwave is not configured. Please set FLW_PUBLIC_KEY, FLW_SECRET_KEY and FLW_ENCRYPTION_KEY."}), 400
-
+        return jsonify({"error": "Flutterwave is not configured."}), 400
     try:
         data = request.json
         username = data.get("username")
         plan_name = data.get("plan_name")
         email = data.get("email")
         currency = data.get("currency", "NGN")
-
         if not email:
             return jsonify({"error": "Email is required for payment"}), 400
-
         if currency not in SUPPORTED_CURRENCIES:
-            return jsonify({"error": f"Currency {currency} is not supported. Supported: {', '.join(SUPPORTED_CURRENCIES.keys())}"}), 400
-
+            return jsonify({"error": f"Currency {currency} is not supported."}), 400
         pricing = load_pricing()
-
         plan = None
         for p in pricing["plans"]:
             if p["name"] == plan_name:
                 plan = p
                 break
-
         if not plan:
             return jsonify({"error": "Plan not found"}), 400
-
         currency_pricing = pricing.get("currency_pricing", {})
         if currency in currency_pricing and plan_name in currency_pricing[currency]:
             amount = currency_pricing[currency][plan_name]
         else:
             amount = plan["price"]
-
         amount = float(amount)
-
         tx_ref = f"VPS-{username}-{secrets.token_hex(8)}"
-
         headers = {
             "Authorization": f"Bearer {FLW_SECRET_KEY}",
             "Content-Type": "application/json"
         }
-
         if FLW_ENCRYPTION_KEY:
             headers["Encryption-Key"] = FLW_ENCRYPTION_KEY
-
         payload = {
             "tx_ref": tx_ref,
             "amount": amount,
             "currency": currency,
             "redirect_url": request.host_url + "payment-verify",
             "payment_options": "card,ussd,banktransfer,mobilemoney",
-            "customer": {
-                "email": email,
-                "name": username,
-            },
+            "customer": {"email": email, "name": username},
             "customizations": {
                 "title": "NCK Dev VPS Subscription",
                 "description": f"{plan_name} Plan - {plan['duration']} ({currency})",
             },
-            "meta": {
-                "username": username,
-                "plan": plan_name,
-                "currency": currency
-            }
+            "meta": {"username": username, "plan": plan_name, "currency": currency}
         }
-
         response = requests.post(FLW_INITIALIZE_URL, json=payload, headers=headers)
         result = response.json()
-
         if result["status"] == "success":
             return jsonify({
                 "status": True,
@@ -711,36 +845,26 @@ def initialize_payment():
             })
         else:
             return jsonify({"error": result.get("message", "Payment initialization failed")}), 400
-
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
 @app.route("/payment-verify")
 def payment_verify():
     tx_ref = request.args.get("tx_ref")
-
     if not tx_ref:
         flash("No transaction reference found!", "error")
         return redirect(url_for("pricing_page"))
-
     try:
-        headers = {
-            "Authorization": f"Bearer {FLW_SECRET_KEY}",
-            "Content-Type": "application/json"
-        }
-
+        headers = {"Authorization": f"Bearer {FLW_SECRET_KEY}", "Content-Type": "application/json"}
         if FLW_ENCRYPTION_KEY:
             headers["Encryption-Key"] = FLW_ENCRYPTION_KEY
-
         response = requests.get(f"{FLW_VERIFY_URL}{tx_ref}/verify", headers=headers)
         result = response.json()
-
         if result["status"] == "success" and result["data"]["status"] == "successful":
             metadata = result["data"]["meta"]
             username = metadata.get("username")
             plan = metadata.get("plan")
             currency = metadata.get("currency", "NGN")
-
             users = load_users()
             if username in users:
                 users[username]["payment_status"] = "paid"
@@ -754,10 +878,8 @@ def payment_verify():
                 flash("User not found!", "error")
         else:
             flash("Payment verification failed. Please contact support.", "error")
-
     except Exception as e:
         flash(f"Error verifying payment: {str(e)}", "error")
-
     return redirect(url_for("login"))
 
 @app.route("/payment-cancel")
@@ -765,235 +887,216 @@ def payment_cancel():
     flash("Payment cancelled. You can try again anytime.", "error")
     return redirect(url_for("pricing_page"))
 
-# ==================== REQUIREMENTS.TXT UPLOAD ====================
-@app.route("/upload-requirements", methods=["POST"])
+# ---------- Project Routes ----------
+@app.route("/projects")
 @require_user
-def upload_requirements():
+def projects_list():
+    u = current_user()
+    projects = get_user_projects(u)
+    for pid, project in projects.items():
+        project["is_running"] = is_project_running(u, pid)
+        project["logs_count"] = len(get_project_logs(u, pid))
+    return render_template("projects.html", username=u, projects=projects, total_projects=len(projects))
+
+@app.route("/project/create", methods=["POST"])
+@require_user
+def project_create():
     u = current_user()
     users = load_users()
-    
     if users.get(u, {}).get("payment_status") != "paid":
-        flash("Please subscribe to a plan to upload requirements!", "error")
-        return redirect(url_for("user_dashboard"))
-    
-    udir = user_dir(u)
-    
-    if 'requirements' not in request.files:
-        flash("No file uploaded!", "error")
-        return redirect(url_for("user_dashboard"))
-    
-    file = request.files['requirements']
-    if file.filename == '' or not file.filename.endswith('.txt'):
-        flash("Please upload a valid requirements.txt file!", "error")
-        return redirect(url_for("user_dashboard"))
-    
-    # Save requirements.txt
-    name = secure_filename(file.filename)
-    file.save(udir / name)
-    
-    # Install requirements
-    try:
-        result = subprocess.run(
-            ['pip', 'install', '-r', str(udir / name)],
-            cwd=str(udir),
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
-        
-        if result.returncode == 0:
-            flash(f"✅ Requirements installed successfully!", "success")
-        else:
-            flash(f"⚠️ Some packages failed to install: {result.stderr[:200]}", "warning")
-    except subprocess.TimeoutExpired:
-        flash("❌ Installation timed out. Some packages may be too large.", "error")
-    except Exception as e:
-        flash(f"❌ Error installing requirements: {str(e)}", "error")
-    
-    # Trigger backup
-    threading.Thread(target=lambda: manual_backup("Requirements uploaded"), daemon=True).start()
-    
-    return redirect(url_for("user_dashboard"))
+        flash("Please subscribe to a plan to create projects!", "error")
+        return redirect(url_for("projects_list"))
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip()
+    if not name:
+        flash("Project name is required!", "error")
+        return redirect(url_for("projects_list"))
+    user_data = users.get(u, {})
+    subscription = user_data.get("subscription", "Basic")
+    max_projects = {"Basic": 1, "Pro": 5, "Premium": 20}.get(subscription, 1)
+    current_projects = len(get_user_projects(u))
+    if current_projects >= max_projects:
+        flash(f"Project limit reached! Your {subscription} plan allows {max_projects} project(s).", "error")
+        return redirect(url_for("projects_list"))
+    project_id = create_project(u, name, description)
+    flash(f"Project '{name}' created successfully!", "success")
+    return redirect(url_for("project_detail", project_id=project_id))
 
-# ==================== ENVIRONMENT VARIABLES ====================
-@app.route("/get-env-vars")
+@app.route("/project/<project_id>")
 @require_user
-def get_env_vars():
+def project_detail(project_id):
     u = current_user()
-    udir = user_dir(u)
-    env_file = udir / ".env"
-    
-    env_vars = []
-    if env_file.exists():
-        with open(env_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    parts = line.split('=', 1)
-                    if len(parts) == 2:
-                        env_vars.append({"key": parts[0].strip(), "value": parts[1].strip()})
-    
-    return jsonify({"env_vars": env_vars})
+    project = get_project(u, project_id)
+    if not project:
+        flash("Project not found!", "error")
+        return redirect(url_for("projects_list"))
+    project_dir = FILES_ROOT / u / project_id
+    files = []
+    if project_dir.exists():
+        files = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
+    project["files"] = files
+    project["is_running"] = is_project_running(u, project_id)
+    project["logs"] = get_project_logs(u, project_id)
+    return render_template("project_detail.html", username=u, project=project, files=files)
 
-@app.route("/save-env-vars", methods=["POST"])
+@app.route("/project/<project_id>/upload", methods=["POST"])
 @require_user
-def save_env_vars():
+def project_upload(project_id):
     u = current_user()
-    udir = user_dir(u)
-    env_file = udir / ".env"
-    
-    data = request.json
-    env_vars = data.get("env_vars", [])
-    
-    try:
-        with open(env_file, 'w') as f:
-            for env in env_vars:
-                f.write(f"{env['key']}={env['value']}\n")
-        
-        threading.Thread(target=lambda: manual_backup("Environment variables saved"), daemon=True).start()
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+    users = load_users()
+    if users.get(u, {}).get("payment_status") != "paid":
+        flash("Please subscribe to a plan to upload files!", "error")
+        return redirect(url_for("project_detail", project_id=project_id))
+    project = get_project(u, project_id)
+    if not project:
+        flash("Project not found!", "error")
+        return redirect(url_for("projects_list"))
+    project_dir = FILES_ROOT / u / project_id
+    files = request.files.getlist("files")
+    for file in files:
+        if not file or not file.filename:
+            continue
+        name = secure_filename(file.filename)
+        if not name:
+            continue
+        valid, msg = file_upload_security.validate_file(file)
+        if not valid:
+            flash(msg, "error")
+            continue
+        file.save(project_dir / name)
+        projects = load_projects()
+        if u in projects and project_id in projects[u]:
+            if name not in projects[u][project_id]["files"]:
+                projects[u][project_id]["files"].append(name)
+            projects[u][project_id]["updated_at"] = time.time()
+            save_projects(projects)
+    flash("Files uploaded successfully!", "success")
+    return redirect(url_for("project_detail", project_id=project_id))
 
-@app.route("/clear-env-vars", methods=["POST"])
+@app.route("/project/<project_id>/file/delete/<filename>", methods=["POST"])
 @require_user
-def clear_env_vars():
+def project_file_delete(project_id, filename):
     u = current_user()
-    udir = user_dir(u)
-    env_file = udir / ".env"
-    
-    try:
-        if env_file.exists():
-            env_file.unlink()
-        threading.Thread(target=lambda: manual_backup("Environment variables cleared"), daemon=True).start()
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-# ==================== GITHUB DEPLOY ====================
-@app.route("/deploy-github", methods=["POST"])
-@require_user
-def deploy_github():
-    u = current_user()
-    udir = user_dir(u)
-    
-    data = request.json
-    repo = data.get("repo")
-    branch = data.get("branch", "main")
-    run_command = data.get("run_command")
-    env_vars = data.get("env_vars", {})
-    
-    if not repo or not run_command:
-        return jsonify({"success": False, "error": "Repository URL and run command are required"}), 400
-    
-    try:
-        import tempfile
-        import shutil
-        
-        # Create a temp directory for cloning
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Clone the repo
-            clone_url = f"https://github.com/{repo}.git"
-            clone_cmd = ["git", "clone", "--depth", "1", clone_url, temp_dir]
-            
-            if branch != "main":
-                clone_cmd = ["git", "clone", "--depth", "1", "-b", branch, clone_url, temp_dir]
-            
-            result = subprocess.run(clone_cmd, capture_output=True, text=True, timeout=120)
-            
-            if result.returncode != 0:
-                return jsonify({"success": False, "error": f"Git clone failed: {result.stderr}"}), 400
-            
-            # Copy files to user directory
-            for item in Path(temp_dir).iterdir():
-                if item.is_file():
-                    shutil.copy2(item, udir / item.name)
-                elif item.is_dir() and item.name not in ['.git']:
-                    shutil.copytree(item, udir / item.name, dirs_exist_ok=True)
-            
-            # Save environment variables to .env file
-            if env_vars:
-                env_file = udir / ".env"
-                with open(env_file, 'w') as f:
-                    for key, value in env_vars.items():
-                        if key and value:
-                            f.write(f"{key}={value}\n")
-            
-            # Install requirements if exists
-            req_file = udir / "requirements.txt"
-            if req_file.exists():
-                subprocess.run(
-                    ['pip', 'install', '-r', str(req_file)],
-                    cwd=str(udir),
-                    capture_output=True,
-                    timeout=300
-                )
-            
-            # Save run command
-            with open(udir / "run_command.txt", 'w') as f:
-                f.write(run_command)
-            
-            threading.Thread(target=lambda: manual_backup(f"GitHub deploy: {repo}"), daemon=True).start()
-            
-            return jsonify({"success": True, "message": "Repository deployed successfully!"})
-            
-    except subprocess.TimeoutExpired:
-        return jsonify({"success": False, "error": "Deployment timed out. Try again with a smaller repository."}), 400
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-# ---------- GitHub Backup Routes ----------
-@app.route("/admin/backup", methods=["POST"])
-@require_owner
-def admin_backup():
-    def do_backup():
-        success = manual_backup("Manual backup triggered by admin")
-        if success:
-            flash("Backup completed successfully!", "success")
-        else:
-            flash("Backup skipped (no data or not enabled)", "warning")
-
-    threading.Thread(target=do_backup, daemon=True).start()
-    flash("Backup started in background!", "success")
-    return redirect(url_for("owner_dashboard"))
-
-@app.route("/admin/backup-status")
-@require_owner
-def admin_backup_status():
-    status = get_backup_status()
-    status['has_data'] = has_data()
-    return jsonify(status)
-
-@app.route("/admin/restore", methods=["POST"])
-@require_owner
-def admin_restore():
-    if not github_backup.is_enabled:
-        flash("GitHub backup not configured!", "error")
-        return redirect(url_for("owner_dashboard"))
-
-    success = force_restore()
-    if success:
-        flash("Restore successful! Data reloaded from GitHub.", "success")
+    project = get_project(u, project_id)
+    if not project:
+        flash("Project not found!", "error")
+        return redirect(url_for("projects_list"))
+    project_dir = FILES_ROOT / u / project_id
+    filepath = project_dir / filename
+    if filepath.exists() and filepath.is_file():
+        filepath.unlink()
+        projects = load_projects()
+        if u in projects and project_id in projects[u]:
+            if filename in projects[u][project_id]["files"]:
+                projects[u][project_id]["files"].remove(filename)
+            projects[u][project_id]["updated_at"] = time.time()
+            save_projects(projects)
+        flash(f"File '{filename}' deleted!", "success")
     else:
-        flash("Restore failed. No backup found.", "error")
-    return redirect(url_for("owner_dashboard"))
+        flash("File not found!", "error")
+    return redirect(url_for("project_detail", project_id=project_id))
 
-@app.route("/admin/force-restore", methods=["POST"])
-@require_owner
-def admin_force_restore():
-    if not github_backup.is_enabled:
-        flash("GitHub backup not configured!", "error")
-        return redirect(url_for("owner_dashboard"))
+@app.route("/project/<project_id>/save-run-command", methods=["POST"])
+@require_user
+def project_save_run_command(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        flash("Project not found!", "error")
+        return redirect(url_for("projects_list"))
+    run_command = request.form.get("run_command", "").strip()
+    if not run_command:
+        flash("Run command is required!", "error")
+        return redirect(url_for("project_detail", project_id=project_id))
+    projects = load_projects()
+    if u in projects and project_id in projects[u]:
+        projects[u][project_id]["run_command"] = run_command
+        projects[u][project_id]["updated_at"] = time.time()
+        save_projects(projects)
+        flash("Run command saved!", "success")
+    return redirect(url_for("project_detail", project_id=project_id))
 
-    manual_backup("Pre-restore backup")
-    success = force_restore()
+@app.route("/project/<project_id>/start", methods=["POST"])
+@require_user
+def project_start(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        return jsonify({"success": False, "error": "Project not found"}), 404
+    if is_project_running(u, project_id):
+        return jsonify({"success": False, "error": "Project is already running"}), 400
+    success, msg = start_project_process(u, project_id)
     if success:
-        flash("Force restore successful!", "success")
-    else:
-        flash("Force restore failed.", "error")
-    return redirect(url_for("owner_dashboard"))
+        threading.Thread(target=lambda: manual_backup(f"Project started: {project['name']}"), daemon=True).start()
+        return jsonify({"success": True, "message": msg})
+    return jsonify({"success": False, "error": msg}), 400
 
-# ---------- owner routes ----------
+@app.route("/project/<project_id>/stop", methods=["POST"])
+@require_user
+def project_stop(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        return jsonify({"success": False, "error": "Project not found"}), 404
+    if not is_project_running(u, project_id):
+        return jsonify({"success": True, "message": "Project is already stopped"})
+    stop_project_process(u, project_id)
+    threading.Thread(target=lambda: manual_backup(f"Project stopped: {project['name']}"), daemon=True).start()
+    return jsonify({"success": True, "message": "Project stopped"})
+
+@app.route("/project/<project_id>/logs")
+@require_user
+def project_logs(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        return jsonify({"success": False, "error": "Project not found"}), 404
+    logs = get_project_logs(u, project_id)
+    return jsonify({"success": True, "logs": logs, "is_running": is_project_running(u, project_id)})
+
+@app.route("/project/<project_id>/delete", methods=["POST"])
+@require_user
+def project_delete(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        flash("Project not found!", "error")
+        return redirect(url_for("projects_list"))
+    if is_project_running(u, project_id):
+        stop_project_process(u, project_id)
+    if delete_project(u, project_id):
+        threading.Thread(target=lambda: manual_backup(f"Project deleted: {project['name']}"), daemon=True).start()
+        flash(f"Project '{project['name']}' deleted!", "success")
+    else:
+        flash("Failed to delete project!", "error")
+    return redirect(url_for("projects_list"))
+
+@app.route("/project/<project_id>/env-vars")
+@require_user
+def project_env_vars(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        return jsonify({"success": False, "error": "Project not found"}), 404
+    return jsonify({"env_vars": project.get("env_vars", {})})
+
+@app.route("/project/<project_id>/save-env-vars", methods=["POST"])
+@require_user
+def project_save_env_vars(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        return jsonify({"success": False, "error": "Project not found"}), 404
+    env_vars = request.json.get("env_vars", {})
+    projects = load_projects()
+    if u in projects and project_id in projects[u]:
+        projects[u][project_id]["env_vars"] = env_vars
+        projects[u][project_id]["updated_at"] = time.time()
+        save_projects(projects)
+        return jsonify({"success": True})
+    return jsonify({"success": False, "error": "Failed to save"}), 500
+
+# ---------- Owner Routes ----------
 @app.route("/owner")
 @require_owner
 def owner_dashboard():
@@ -1001,7 +1104,6 @@ def owner_dashboard():
     now = time.time()
     base = request.host_url.rstrip("/")
     backup_info = get_backup_status()
-
     return render_template("owner.html",
         users=users,
         now=now,
@@ -1018,17 +1120,14 @@ def owner_create():
     p = request.form.get("password", "").strip()
     subscription = request.form.get("subscription", "Basic")
     email = request.form.get("email", "").strip()
-
     if not u or not p:
         return redirect(url_for("owner_dashboard"))
     if u == OWNER_USER:
         return redirect(url_for("owner_dashboard"))
-
     users = load_users()
     if u in users:
         flash("User already exists!", "error")
         return redirect(url_for("owner_dashboard"))
-
     users[u] = {
         "password": generate_password_hash(p),
         "created_at": time.time(),
@@ -1036,6 +1135,7 @@ def owner_create():
         "token": secrets.token_urlsafe(16),
         "payment_status": "paid",
         "email": email,
+        "banned": False,
     }
     save_users(users)
     user_dir(u)
@@ -1047,7 +1147,10 @@ def owner_create():
 def owner_delete(username):
     users = load_users()
     if username in users:
-        stop_process(username)
+        if username == OWNER_USER:
+            flash("Cannot delete the owner!", "error")
+            return redirect(url_for("owner_dashboard"))
+        stop_project_process(username, None)  # Stop all processes
         del users[username]
         save_users(users)
         d = FILES_ROOT / username
@@ -1079,7 +1182,6 @@ def owner_pricing():
     durs = request.form.getlist("p_duration")
     prices = request.form.getlist("p_price")
     feats = request.form.getlist("p_features")
-
     for i in range(len(names)):
         if not names[i].strip():
             continue
@@ -1094,7 +1196,178 @@ def owner_pricing():
     flash("Pricing updated!", "success")
     return redirect(url_for("owner_dashboard") + "#pricing")
 
-# ---------- user dashboard ----------
+# ---------- User Ban/Unban Routes ----------
+@app.route("/owner/ban/<username>", methods=["POST"])
+@require_owner
+def owner_ban_user(username):
+    users = load_users()
+    if username in users:
+        if username == OWNER_USER:
+            flash("❌ Cannot ban the owner!", "error")
+            return redirect(url_for("owner_dashboard"))
+        users[username]["banned"] = True
+        users[username]["banned_at"] = time.time()
+        users[username]["banned_reason"] = "Banned by owner"
+        save_users(users)
+        flash(f"✅ User {username} has been banned!", "success")
+        threading.Thread(target=lambda: manual_backup(f"User banned: {username}"), daemon=True).start()
+    else:
+        flash(f"❌ User {username} not found!", "error")
+    return redirect(url_for("owner_dashboard"))
+
+@app.route("/owner/unban/<username>", methods=["POST"])
+@require_owner
+def owner_unban_user(username):
+    users = load_users()
+    if username in users:
+        users[username]["banned"] = False
+        users[username]["banned_at"] = None
+        users[username]["banned_reason"] = None
+        save_users(users)
+        flash(f"✅ User {username} has been unbanned!", "success")
+        threading.Thread(target=lambda: manual_backup(f"User unbanned: {username}"), daemon=True).start()
+    else:
+        flash(f"❌ User {username} not found!", "error")
+    return redirect(url_for("owner_dashboard"))
+
+@app.route("/owner/ban-all", methods=["POST"])
+@require_owner
+def owner_ban_all_users():
+    users = load_users()
+    count = 0
+    for username in users:
+        if username != OWNER_USER:
+            users[username]["banned"] = True
+            users[username]["banned_at"] = time.time()
+            users[username]["banned_reason"] = "Banned by owner (bulk action)"
+            count += 1
+    save_users(users)
+    flash(f"✅ {count} users have been banned!", "success")
+    threading.Thread(target=lambda: manual_backup(f"Bulk ban: {count} users"), daemon=True).start()
+    return redirect(url_for("owner_dashboard"))
+
+@app.route("/owner/unban-all", methods=["POST"])
+@require_owner
+def owner_unban_all_users():
+    users = load_users()
+    count = 0
+    for username in users:
+        if users[username].get("banned", False):
+            users[username]["banned"] = False
+            users[username]["banned_at"] = None
+            users[username]["banned_reason"] = None
+            count += 1
+    save_users(users)
+    flash(f"✅ {count} users have been unbanned!", "success")
+    threading.Thread(target=lambda: manual_backup(f"Bulk unban: {count} users"), daemon=True).start()
+    return redirect(url_for("owner_dashboard"))
+
+# ---------- IP Blocking Routes ----------
+@app.route("/admin/blocked-ips")
+@require_owner
+def get_blocked_ips():
+    blocked = []
+    current_time = time.time()
+    for ip, expiry in rate_limiter.blocked_ips.items():
+        if current_time < expiry:
+            blocked.append({"ip": ip, "expires": datetime.fromtimestamp(expiry).strftime("%Y-%m-%d %H:%M:%S"), "reason": "Rate limit exceeded", "source": "rate_limiter"})
+    for ip, data in brute_force.attempts.items():
+        if data.get('blocked_until', 0) > current_time:
+            blocked.append({"ip": ip, "expires": datetime.fromtimestamp(data['blocked_until']).strftime("%Y-%m-%d %H:%M:%S"), "reason": f"Brute force ({data['count']} attempts)", "source": "brute_force"})
+    for ip, reason in request_validator.banned_ips.items():
+        blocked.append({"ip": ip, "expires": "Permanent", "reason": reason, "source": "manual"})
+    return jsonify({"blocked_ips": blocked})
+
+@app.route("/admin/unblock-all-ips", methods=["POST"])
+@require_owner
+def unblock_all_ips():
+    rate_limiter.blocked_ips.clear()
+    for ip in brute_force.attempts:
+        brute_force.attempts[ip]['blocked_until'] = 0
+        brute_force.attempts[ip]['count'] = 0
+    request_validator.banned_ips.clear()
+    flash("✅ All IPs have been unblocked!", "success")
+    return redirect(url_for("owner_dashboard"))
+
+@app.route("/admin/block-ip", methods=["POST"])
+@require_owner
+def block_ip_manual():
+    ip = request.form.get("ip", "").strip()
+    reason = request.form.get("reason", "Manual block")
+    try:
+        ipaddress.ip_address(ip)
+        request_validator.banned_ips[ip] = reason
+        flash(f"✅ IP {ip} blocked: {reason}", "success")
+    except:
+        flash("❌ Invalid IP address.", "error")
+    return redirect(url_for("owner_dashboard"))
+
+@app.route("/admin/unblock-ip/<ip>", methods=["POST"])
+@require_owner
+def unblock_ip(ip):
+    try:
+        ipaddress.ip_address(ip)
+        if ip in rate_limiter.blocked_ips:
+            del rate_limiter.blocked_ips[ip]
+        if ip in brute_force.attempts:
+            brute_force.attempts[ip]['blocked_until'] = 0
+            brute_force.attempts[ip]['count'] = 0
+        if ip in request_validator.banned_ips:
+            del request_validator.banned_ips[ip]
+        flash(f"✅ IP {ip} unblocked successfully!", "success")
+    except:
+        flash("❌ Invalid IP address.", "error")
+    return redirect(url_for("owner_dashboard"))
+
+# ---------- GitHub Backup Routes ----------
+@app.route("/admin/backup", methods=["POST"])
+@require_owner
+def admin_backup():
+    def do_backup():
+        success = manual_backup("Manual backup triggered by admin")
+        if success:
+            flash("Backup completed successfully!", "success")
+        else:
+            flash("Backup skipped (no data or not enabled)", "warning")
+    threading.Thread(target=do_backup, daemon=True).start()
+    flash("Backup started in background!", "success")
+    return redirect(url_for("owner_dashboard"))
+
+@app.route("/admin/backup-status")
+@require_owner
+def admin_backup_status():
+    status = get_backup_status()
+    status['has_data'] = has_data()
+    return jsonify(status)
+
+@app.route("/admin/restore", methods=["POST"])
+@require_owner
+def admin_restore():
+    if not github_backup.is_enabled:
+        flash("GitHub backup not configured!", "error")
+        return redirect(url_for("owner_dashboard"))
+    success = force_restore()
+    if success:
+        flash("Restore successful! Data reloaded from GitHub.", "success")
+    else:
+        flash("Restore failed. No backup found.", "error")
+    return redirect(url_for("owner_dashboard"))
+
+@app.route("/admin/force-restore", methods=["POST"])
+@require_owner
+def admin_force_restore():
+    if not github_backup.is_enabled:
+        flash("GitHub backup not configured!", "error")
+        return redirect(url_for("owner_dashboard"))
+    manual_backup("Pre-restore backup")
+    success = force_restore()
+    if success:
+        flash("Force restore successful!", "success")
+    else:
+        flash("Force restore failed.", "error")
+    return redirect(url_for("owner_dashboard"))
+
+# ---------- User Dashboard ----------
 @app.route("/dashboard")
 @require_user
 def user_dashboard():
@@ -1103,13 +1376,11 @@ def user_dashboard():
     info = users.get(u, {})
     udir = user_dir(u)
     files = sorted([f.name for f in udir.iterdir() if f.is_file()])
-
     is_paid = info.get("payment_status") == "paid"
-
     return render_template("user.html",
         username=u, info=info, files=files,
-        running=is_running(u),
-        running_file=(PROCS.get(u, {}).get("file") if is_running(u) else None),
+        running=False,
+        running_file=None,
         subscription=info.get("subscription", "Basic"),
         is_paid=is_paid,
         email=info.get("email", ""),
@@ -1122,8 +1393,7 @@ def upload():
     users = load_users()
     if users.get(u, {}).get("payment_status") != "paid":
         flash("Please subscribe to a plan to upload files!", "error")
-        return redirect(url_for("pricing_page"))
-
+        return redirect(url_for("user_dashboard"))
     udir = user_dir(u)
     files = request.files.getlist("files")
     for f in files:
@@ -1132,9 +1402,12 @@ def upload():
         name = secure_filename(f.filename)
         if not name:
             continue
+        valid, msg = file_upload_security.validate_file(f)
+        if not valid:
+            flash(msg, "error")
+            continue
         f.save(udir / name)
     flash("Files uploaded successfully!", "success")
-    threading.Thread(target=lambda: manual_backup("File upload"), daemon=True).start()
     return redirect(url_for("user_dashboard"))
 
 @app.route("/file/delete/<name>", methods=["POST"])
@@ -1146,7 +1419,6 @@ def file_delete(name):
     if p.exists() and p.is_file():
         p.unlink()
         flash(f"File {name} deleted!", "success")
-        threading.Thread(target=lambda: manual_backup("File deleted"), daemon=True).start()
     return redirect(url_for("user_dashboard"))
 
 @app.route("/file/view/<name>")
@@ -1155,62 +1427,6 @@ def file_view(name):
     u = current_user()
     name = secure_filename(name)
     return send_from_directory(user_dir(u), name, as_attachment=False)
-
-@app.route("/server/start", methods=["POST"])
-@require_user
-def server_start():
-    u = current_user()
-    fname = secure_filename(request.form.get("file", ""))
-    ok, msg = start_process(u, fname)
-    return jsonify({"ok": ok, "msg": msg})
-
-@app.route("/server/stop", methods=["POST"])
-@require_user
-def server_stop():
-    u = current_user()
-    stop_process(u)
-    return jsonify({"ok": True})
-
-@app.route("/server/restart", methods=["POST"])
-@require_user
-def server_restart():
-    u = current_user()
-    info = PROCS.get(u)
-    fname = info["file"] if info else secure_filename(request.form.get("file", ""))
-    if not fname:
-        return jsonify({"ok": False, "msg": "no file"})
-    stop_process(u)
-    time.sleep(0.3)
-    ok, msg = start_process(u, fname)
-    return jsonify({"ok": ok, "msg": msg})
-
-@app.route("/server/delete", methods=["POST"])
-@require_user
-def server_delete():
-    u = current_user()
-    stop_process(u)
-    PROCS.pop(u, None)
-    return jsonify({"ok": True})
-
-@app.route("/logs")
-@require_user
-def logs_api():
-    u = current_user()
-    return jsonify({
-        "running": is_running(u),
-        "file": PROCS.get(u, {}).get("file"),
-        "logs": get_logs(u),
-        "install": list(INSTALL_LOGS.get(u, [])),
-        "subscription": PROCS.get(u, {}).get("subscription", "Basic"),
-    })
-
-@app.route("/install", methods=["POST"])
-@require_user
-def install():
-    u = current_user()
-    cmd = request.form.get("command", "").strip()
-    ok, msg = run_install(u, cmd)
-    return jsonify({"ok": ok, "msg": msg})
 
 @app.route("/healthz")
 def health():

@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+{% block title %}{{project.name}} — NCK Dev VPS{% endblock %}
+{% block body %}
+<div class="wrap">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;margin-bottom:20px">
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="width:48px;height:48px;border-radius:12px;background:var(--grad2);display:grid;place-items:center;font-size:22px">📁</div>
+      <div>
+        <h1 style="font-size:24px;margin:0">{{project.name}}</h1>
+        <p class="muted" style="margin:0">{{project.description or 'No description'}}</p>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <a href="/projects" class="btn btn-ghost btn-sm">📂 All Projects</a>
+      <form method="post" action="/project/{{project.id}}/delete" onsubmit="return confirm('Delete this project and all files?')" style="display:inline">
+        <button class="btn btn-danger btn-sm">🗑️ Delete</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Project Status -->
+  <div class="card" style="margin-bottom:18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div>
+        <span class="badge badge-subscription">📊 {{project.files|length}} files</span>
+        {% if project.is_running %}
+        <span class="badge badge-on">🟢 Running</span>
+        {% else %}
+        <span class="badge badge-off">🔴 Stopped</span>
+        {% endif %}
+      </div>
+      <div style="display:flex;gap:8px">
+        {% if project.is_running %}
+        <form method="post" action="/project/{{project.id}}/stop" style="display:inline">
+          <button class="btn btn-warn btn-sm">⏹ Stop</button>
+        </form>
+        {% else %}
+        <form method="post" action="/project/{{project.id}}/start" style="display:inline">
+          <button class="btn btn-ok btn-sm">▶ Start</button>
+        </form>
+        {% endif %}
+        <button class="btn btn-ghost btn-sm" onclick="refreshLogs()">🔄 Refresh Logs</button>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+    <!-- Left Column -->
+    <div>
+      <!-- Upload Files -->
+      <div class="card">
+        <h2>📤 Upload Files</h2>
+        <form method="post" action="/project/{{project.id}}/upload" enctype="multipart/form-data" class="row">
+          <input type="file" name="files" multiple required style="flex:1">
+          <button class="btn btn-primary">Upload</button>
+        </form>
+        <p class="muted" style="margin:8px 0 0">.py · .js · .sh · .txt · .json · any (max 200MB)</p>
+      </div>
+
+      <!-- Files List -->
+      <div class="card">
+        <h2>📁 Files ({{files|length}})</h2>
+        <ul style="list-style:none;padding:0;margin:0;max-height:300px;overflow:auto">
+          {% for f in files %}
+          <li style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px">
+            <span>📄 {{f}}</span>
+            <span class="row" style="gap:6px">
+              <a href="/file/view/{{f}}" target="_blank"><button class="btn btn-ghost btn-sm" type="button">View</button></a>
+              <form method="post" action="/project/{{project.id}}/file/delete/{{f}}" onsubmit="return confirm('Delete {{f}}?')" style="display:inline">
+                <button class="btn btn-danger btn-sm">×</button>
+              </form>
+            </span>
+          </li>
+          {% else %}
+          <li class="muted" style="padding:14px;text-align:center">No files yet. Upload files above.</li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      <!-- Run Command -->
+      <div class="card">
+        <h2>⚙️ Run Command</h2>
+        <form method="post" action="/project/{{project.id}}/save-run-command" class="row">
+          <input name="run_command" placeholder="python main.py" value="{{project.run_command or ''}}" required style="flex:1">
+          <button class="btn btn-primary">Save</button>
+        </form>
+        <p class="muted" style="margin:8px 0 0">💡 The command to start your bot/application</p>
+      </div>
+    </div>
+
+    <!-- Right Column -->
+    <div>
+      <!-- Environment Variables -->
+      <div class="card">
+        <h2>🔑 Environment Variables</h2>
+        <form id="env-form" onsubmit="return addEnvVar(event)">
+          <div class="row" style="margin-bottom:8px">
+            <input id="env-key" placeholder="KEY" style="flex:1;min-width:80px">
+            <input id="env-value" placeholder="value" style="flex:1;min-width:80px">
+            <button class="btn btn-primary btn-sm" type="submit">➕ Add</button>
+          </div>
+        </form>
+        <div id="env-list" style="margin-top:8px;max-height:200px;overflow-y:auto;font-size:13px;"></div>
+        <button class="btn btn-ok btn-sm" onclick="saveEnvVars()" style="margin-top:8px">💾 Save</button>
+      </div>
+
+      <!-- Logs -->
+      <div class="card">
+        <h2>📜 Logs</h2>
+        <div id="logs" style="background:#04060d;color:#a6f3a6;font-family:'JetBrains Mono',monospace;font-size:12px;padding:14px;border-radius:10px;height:350px;overflow:auto;white-space:pre-wrap;border:1px solid var(--border)">Waiting for output...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Environment Variables
+let envVars = {};
+
+function loadEnvVars() {
+    const projectId = '{{project.id}}';
+    fetch(`/project/${projectId}/env-vars`)
+        .then(r => r.json())
+        .then(data => {
+            envVars = data.env_vars || {};
+            renderEnvList();
+        })
+        .catch(() => {});
+}
+
+function addEnvVar(e) {
+    e.preventDefault();
+    const key = document.getElementById('env-key').value.trim();
+    const value = document.getElementById('env-value').value.trim();
+    
+    if (!key || !value) {
+        alert('Please enter both KEY and VALUE');
+        return false;
+    }
+    
+    envVars[key] = value;
+    renderEnvList();
+    document.getElementById('env-key').value = '';
+    document.getElementById('env-value').value = '';
+    return false;
+}
+
+function removeEnvVar(key) {
+    delete envVars[key];
+    renderEnvList();
+}
+
+function renderEnvList() {
+    const container = document.getElementById('env-list');
+    const keys = Object.keys(envVars);
+    
+    if (keys.length === 0) {
+        container.innerHTML = '<p class="muted">No environment variables set.</p>';
+        return;
+    }
+    
+    container.innerHTML = keys.map(key => `
+        <div class="env-item">
+            <span><span class="env-key">${key}</span> = <span class="env-value">${envVars[key]}</span></span>
+            <span class="env-remove" onclick="removeEnvVar('${key}')">✕</span>
+        </div>
+    `).join('');
+}
+
+function saveEnvVars() {
+    const projectId = '{{project.id}}';
+    fetch(`/project/${projectId}/save-env-vars`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ env_vars: envVars })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            alert('✅ Environment variables saved!');
+        } else {
+            alert('❌ Failed to save');
+        }
+    });
+}
+
+// Logs
+async function refreshLogs() {
+    const projectId = '{{project.id}}';
+    const logBox = document.getElementById('logs');
+    
+    try {
+        const r = await fetch(`/project/${projectId}/logs`);
+        const j = await r.json();
+        const atBottom = logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 30;
+        logBox.textContent = j.logs.length ? j.logs.join('\n') : 'Waiting for output...';
+        if (atBottom) logBox.scrollTop = logBox.scrollHeight;
+    } catch(e) {}
+}
+
+// Auto-refresh logs every 2 seconds
+setInterval(refreshLogs, 2000);
+setTimeout(loadEnvVars, 500);
+refreshLogs();
+</script>
+
+<style>
+.env-item{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:rgba(10,14,32,0.3);border-radius:6px;margin-bottom:4px;border:1px solid var(--border)}
+.env-item .env-key{color:#a5b4fc;font-weight:600}
+.env-item .env-value{color:#6ee7b7}
+.env-item .env-remove{cursor:pointer;color:#ef4444;font-weight:bold;padding:0 4px}
+</style>
+{% endblock %}
