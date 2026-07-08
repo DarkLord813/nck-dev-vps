@@ -17,7 +17,6 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
-from functools import wraps
 import ipaddress
 import hmac
 
@@ -775,7 +774,6 @@ def initialize_payment():
         email = data.get("email")
         currency = data.get("currency", "NGN")
         
-        # Log the request for debugging
         print(f"💰 Payment request: username={username}, plan={plan_name}, email={email}, currency={currency}")
         
         # If no email provided, try to get from users
@@ -783,10 +781,8 @@ def initialize_payment():
             users = load_users()
             user_data = users.get(username, {})
             email = user_data.get("email", "")
-            
-            # If still no email, return error
             if not email:
-                return jsonify({"error": "Email is required for payment. Please update your profile."}), 400
+                return jsonify({"error": "Email is required for payment."}), 400
         
         if currency not in SUPPORTED_CURRENCIES:
             return jsonify({"error": f"Currency {currency} is not supported."}), 400
@@ -855,7 +851,9 @@ def initialize_payment():
             })
         else:
             error_msg = result.get("message", "Payment initialization failed")
+            print(f"❌ Flutterwave error: {error_msg}")
             return jsonify({"error": error_msg}), 400
+            
     except Exception as e:
         print(f"❌ Payment error: {e}")
         return jsonify({"error": str(e)}), 400
@@ -1400,6 +1398,21 @@ def owner_pricing():
     flash("Pricing updated!", "success")
     return redirect(url_for("owner_dashboard") + "#pricing")
 
+@app.route("/owner/update_subscription/<username>", methods=["POST"])
+@require_owner
+def owner_update_subscription(username):
+    """Update a user's subscription plan"""
+    subscription = request.form.get("subscription", "Basic")
+    users = load_users()
+    if username in users:
+        users[username]["subscription"] = subscription
+        users[username]["payment_status"] = "paid"
+        save_users(users)
+        flash(f"✅ Subscription updated for {username}!", "success")
+    else:
+        flash(f"❌ User {username} not found!", "error")
+    return redirect(url_for("owner_dashboard"))
+
 @app.route("/admin/backup", methods=["POST"])
 @require_owner
 def admin_backup():
@@ -1510,7 +1523,8 @@ def debug():
     return jsonify({
         "status": "running",
         "service": "NCK Dev VPS",
-        "github_backup_enabled": github_backup.is_enabled if github_backup else False
+        "github_backup_enabled": github_backup.is_enabled if github_backup else False,
+        "flw_enabled": FLW_ENABLED
     })
 
 if __name__ == "__main__":
