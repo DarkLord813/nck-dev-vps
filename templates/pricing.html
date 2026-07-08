@@ -114,6 +114,8 @@ async function payWithFlutterwave(username, planName, email, currency) {
         
         if (result.status) {
             window.location.href = result.link;
+        } else {
+            alert('Payment failed: ' + (result.error || 'Unknown error'));
         }
     } catch (error) {
         alert('Payment error: ' + error.message);
