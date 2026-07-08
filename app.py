@@ -338,7 +338,6 @@ class PortManager:
             return True
         return False
 
-# ========== FIXED: PortManager initialization ==========
 port_manager = PortManager()
 
 # ==================== STORAGE ====================
@@ -1438,6 +1437,41 @@ def project_save_run_command(project_id):
         flash("Run command saved!", "success")
     return redirect(url_for("project_detail", project_id=project_id))
 
+@app.route("/project/<project_id>/toggle-restart", methods=["POST"])
+@require_user
+def project_toggle_restart(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        flash("Project not found!", "error")
+        return redirect(url_for("projects_list"))
+    
+    projects = load_projects()
+    if u in projects and project_id in projects[u]:
+        current = projects[u][project_id].get("restart_on_crash", False)
+        projects[u][project_id]["restart_on_crash"] = not current
+        projects[u][project_id]["crash_count"] = 0
+        save_projects(projects)
+        flash(f"🔄 Auto-restart {'enabled' if not current else 'disabled'}", "success")
+    return redirect(url_for("project_detail", project_id=project_id))
+
+@app.route("/project/<project_id>/restart", methods=["POST"])
+@require_user
+def project_restart(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        return jsonify({"success": False, "error": "Project not found"}), 404
+    
+    stop_project_process(u, project_id)
+    time.sleep(1)
+    success, msg = start_project_process(u, project_id)
+    
+    if success:
+        threading.Thread(target=lambda: manual_backup(f"Project restarted: {project['name']}"), daemon=True).start()
+        return jsonify({"success": True, "message": msg})
+    return jsonify({"success": False, "error": msg}), 400
+
 @app.route("/project/<project_id>/start", methods=["POST"])
 @require_user
 def project_start(project_id):
@@ -1469,6 +1503,31 @@ def project_stop(project_id):
     stop_project_process(u, project_id)
     return jsonify({"success": True, "message": "Project stopped"})
 
+@app.route("/project/<project_id>/env-vars")
+@require_user
+def project_env_vars(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        return jsonify({"success": False, "error": "Project not found"}), 404
+    return jsonify({"env_vars": project.get("env_vars", {})})
+
+@app.route("/project/<project_id>/save-env-vars", methods=["POST"])
+@require_user
+def project_save_env_vars(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        return jsonify({"success": False, "error": "Project not found"}), 404
+    
+    env_vars = request.json.get("env_vars", {})
+    projects = load_projects()
+    if u in projects and project_id in projects[u]:
+        projects[u][project_id]["env_vars"] = env_vars
+        save_projects(projects)
+        return jsonify({"success": True})
+    return jsonify({"success": False, "error": "Failed to save"}), 500
+
 @app.route("/project/<project_id>/logs")
 @require_user
 def project_logs(project_id):
@@ -1485,6 +1544,56 @@ def project_logs(project_id):
         "is_running": is_project_running(u, project_id),
         "total": len(logs)
     })
+
+@app.route("/project/<project_id>/logs/download")
+@require_user
+def project_logs_download(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        flash("Project not found!", "error")
+        return redirect(url_for("projects_list"))
+    
+    logs = get_project_logs(u, project_id, 5000)
+    log_text = "\n".join(logs) if logs else "No logs available."
+    
+    response = Response(log_text, mimetype="text/plain")
+    response.headers["Content-Disposition"] = f"attachment; filename={project['name']}_logs_{datetime.now().strftime('%Y%m%d')}.txt"
+    return response
+
+@app.route("/project/<project_id>/resources")
+@require_user
+def project_resources(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        return jsonify({"success": False, "error": "Project not found"}), 404
+    
+    resources = get_project_resources(u, project_id)
+    return jsonify({
+        "success": True,
+        "cpu": resources["cpu"],
+        "ram": resources["ram"],
+        "ram_mb": resources["ram_mb"],
+        "is_running": is_project_running(u, project_id)
+    })
+
+@app.route("/project/<project_id>/custom-domain", methods=["POST"])
+@require_user
+def project_custom_domain(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        flash("Project not found!", "error")
+        return redirect(url_for("projects_list"))
+    
+    domain = request.form.get("domain", "").strip()
+    projects = load_projects()
+    if u in projects and project_id in projects[u]:
+        projects[u][project_id]["custom_domain"] = domain
+        save_projects(projects)
+        flash(f"Custom domain set to {domain}", "success")
+    return redirect(url_for("project_detail", project_id=project_id))
 
 @app.route("/project/<project_id>/delete", methods=["POST"])
 @require_user
