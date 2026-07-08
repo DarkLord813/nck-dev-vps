@@ -33,35 +33,24 @@
           🔌 Port: {{project.port}}
         </span>
         {% endif %}
-        {% if project.custom_domain %}
-        <span class="badge" style="background:rgba(16,185,129,0.18);color:#6ee7b7;border:1px solid rgba(16,185,129,0.35)">
-          🌐 {{project.custom_domain}}
-        </span>
-        {% endif %}
-        {% if project.has_ssl %}
-        <span class="badge" style="background:rgba(16,185,129,0.18);color:#6ee7b7;border:1px solid rgba(16,185,129,0.35)">
-          🔒 SSL
-        </span>
-        {% endif %}
-        {% if project.has_database %}
-        <span class="badge" style="background:rgba(16,185,129,0.18);color:#6ee7b7;border:1px solid rgba(16,185,129,0.35)">
-          🗄️ Database
-        </span>
-        {% endif %}
         {% if project.restart_on_crash %}
-        <span class="badge badge-on">🔄 Auto-Restart</span>
+        <span class="badge badge-on">🔄 Auto-Restart: ON</span>
+        {% else %}
+        <span class="badge badge-off">🔄 Auto-Restart: OFF</span>
+        {% endif %}
+        {% if project.crash_count and project.crash_count > 0 %}
+        <span class="badge" style="background:rgba(245,158,11,0.18);color:#fbbf24;border:1px solid rgba(245,158,11,0.35)">
+          💥 {{project.crash_count}} crashes
+        </span>
         {% endif %}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         {% if project.is_running %}
-        <form method="post" action="/project/{{project.id}}/stop" style="display:inline">
-          <button class="btn btn-warn btn-sm">⏹ Stop</button>
-        </form>
+        <button class="btn btn-danger btn-sm" onclick="stopProject()">⏹ Stop</button>
         {% else %}
-        <form method="post" action="/project/{{project.id}}/start" style="display:inline">
-          <button class="btn btn-ok btn-sm">▶ Start</button>
-        </form>
+        <button class="btn btn-ok btn-sm" onclick="startProject()">▶ Start</button>
         {% endif %}
+        <button class="btn btn-warn btn-sm" onclick="restartProject()">🔄 Restart</button>
         <button class="btn btn-ghost btn-sm" onclick="refreshAll()">🔄 Refresh</button>
       </div>
     </div>
@@ -88,10 +77,7 @@
     <button class="btn btn-ghost btn-sm" onclick="showTab('settings')" id="tab-settings">⚙️ Settings</button>
     <button class="btn btn-ghost btn-sm" onclick="showTab('env')" id="tab-env">🔑 Env Vars</button>
     <button class="btn btn-ghost btn-sm" onclick="showTab('logs')" id="tab-logs">📜 Logs</button>
-    <button class="btn btn-ghost btn-sm" onclick="showTab('database')" id="tab-database">🗄️ Database</button>
-    <button class="btn btn-ghost btn-sm" onclick="showTab('ssl')" id="tab-ssl">🔒 SSL</button>
-    <button class="btn btn-ghost btn-sm" onclick="showTab('worker')" id="tab-worker">⚡ Worker</button>
-    <button class="btn btn-ghost btn-sm" onclick="showTab('docker')" id="tab-docker">🐳 Docker</button>
+    <button class="btn btn-ghost btn-sm" onclick="showTab('restart')" id="tab-restart">🔄 Auto-Restart</button>
   </div>
 
   <!-- ==================== TAB: FILES ==================== -->
@@ -151,25 +137,6 @@
       <p class="muted" style="margin:8px 0 0">✅ Domain: <strong>{{project.custom_domain}}</strong></p>
       {% endif %}
     </div>
-
-    <div class="card">
-      <h2>🔄 Auto-Restart on Crash</h2>
-      <form method="post" action="/project/{{project.id}}/toggle-restart">
-        <button class="btn {% if project.restart_on_crash %}btn-warn{% else %}btn-ok{% endif %}">
-          {% if project.restart_on_crash %}Disable{% else %}Enable{% endif %} Auto-Restart
-        </button>
-      </form>
-      <p class="muted" style="margin:8px 0 0">
-        {% if project.restart_on_crash %}
-        ✅ Auto-restart enabled (max 5 restarts)
-        {% else %}
-        ❌ Auto-restart disabled
-        {% endif %}
-        {% if project.crash_count and project.crash_count > 0 %}
-        | 💥 Crashes: {{project.crash_count}}
-        {% endif %}
-      </p>
-    </div>
   </div>
 
   <!-- ==================== TAB: ENV VARS ==================== -->
@@ -202,90 +169,44 @@
     </div>
   </div>
 
-  <!-- ==================== TAB: DATABASE ==================== -->
-  <div id="panel-database" class="tab-panel" style="display:none">
+  <!-- ==================== TAB: AUTO-RESTART ==================== -->
+  <div id="panel-restart" class="tab-panel" style="display:none">
     <div class="card">
-      <h2>🗄️ Database</h2>
-      {% if project.has_database %}
-      <p style="color:#6ee7b7">✅ Database: <strong>{{project.database_type or 'SQLite'}}</strong></p>
-      <p class="muted">📁 Path: <code>data.db</code></p>
-      <div style="margin-top:10px">
-        <button class="btn btn-ghost btn-sm" onclick="alert('Database file: data.db')">📊 View Schema</button>
-        <button class="btn btn-danger btn-sm" onclick="if(confirm('Delete database?')) alert('Deletion not implemented')">🗑️ Drop</button>
-      </div>
-      {% else %}
-      <p class="muted">No database created yet.</p>
-      <form method="post" action="/project/{{project.id}}/create-database" class="row">
-        <select name="db_type" style="max-width:150px">
-          <option value="sqlite">SQLite</option>
-          <option value="postgres" disabled>PostgreSQL (Coming Soon)</option>
-          <option value="mysql" disabled>MySQL (Coming Soon)</option>
-        </select>
-        <button class="btn btn-primary">Create Database</button>
-      </form>
-      {% endif %}
-    </div>
-  </div>
-
-  <!-- ==================== TAB: SSL ==================== -->
-  <div id="panel-ssl" class="tab-panel" style="display:none">
-    <div class="card">
-      <h2>🔒 SSL Certificate</h2>
-      {% if project.has_ssl %}
-      <p style="color:#6ee7b7">✅ SSL Enabled</p>
-      <p class="muted">🔗 <strong>{{project.custom_domain or 'No domain set'}}</strong></p>
-      <div style="margin-top:10px">
-        <button class="btn btn-ghost btn-sm" onclick="alert('SSL certificate generated successfully!')">📜 View Cert</button>
-        <button class="btn btn-danger btn-sm" onclick="if(confirm('Remove SSL?')) alert('Removal not implemented')">🗑️ Remove</button>
-      </div>
-      {% else %}
-      <p class="muted">SSL not configured.</p>
-      <p class="muted" style="font-size:13px">Set a custom domain first, then enable SSL.</p>
-      <form method="post" action="/project/{{project.id}}/enable-ssl">
-        <button class="btn btn-primary">🔒 Generate SSL</button>
-      </form>
-      {% endif %}
-    </div>
-  </div>
-
-  <!-- ==================== TAB: WORKER ==================== -->
-  <div id="panel-worker" class="tab-panel" style="display:none">
-    <div class="card">
-      <h2>⚡ Background Worker</h2>
-      <form method="post" action="/project/{{project.id}}/save-worker-command" class="row">
-        <input name="worker_command" placeholder="python worker.py" value="{{project.worker_command or ''}}" style="flex:1">
-        <button class="btn btn-primary">Save</button>
-      </form>
-      <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
-        <form method="post" action="/project/{{project.id}}/worker/start" style="display:inline">
-          <button class="btn btn-ok btn-sm">▶ Start Worker</button>
+      <h2>🔄 Auto-Restart on Crash</h2>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+        <form method="post" action="/project/{{project.id}}/toggle-restart">
+          <button class="btn {% if project.restart_on_crash %}btn-warn{% else %}btn-ok{% endif %}" type="submit">
+            {% if project.restart_on_crash %}
+              🔴 Disable Auto-Restart
+            {% else %}
+              🟢 Enable Auto-Restart
+            {% endif %}
+          </button>
         </form>
-        <form method="post" action="/project/{{project.id}}/worker/stop" style="display:inline">
-          <button class="btn btn-danger btn-sm">⏹ Stop Worker</button>
-        </form>
+        <span class="muted">
+          Status: {% if project.restart_on_crash %}
+            <span style="color:#6ee7b7">✅ Enabled</span>
+          {% else %}
+            <span style="color:#fca5a5">❌ Disabled</span>
+          {% endif %}
+        </span>
+        {% if project.crash_count and project.crash_count > 0 %}
+        <span class="muted" style="color:#f59e0b">💥 Crashed: {{project.crash_count}} times</span>
+        {% endif %}
       </div>
-      <p class="muted" style="margin-top:8px;font-size:12px">
-        Status: {% if project.worker_running %}🟢 Running{% else %}🔴 Stopped{% endif %}
+      <p class="muted" style="margin-top:8px;font-size:13px">
+        📌 <b>How it works:</b><br>
+        • When enabled, the project will automatically restart if it crashes<br>
+        • Max <b>5 restarts</b> per session to prevent infinite loops<br>
+        • Crash count resets when you manually start/stop the project<br>
+        • View crash count in the status bar above
       </p>
-    </div>
-  </div>
-
-  <!-- ==================== TAB: DOCKER ==================== -->
-  <div id="panel-docker" class="tab-panel" style="display:none">
-    <div class="card">
-      <h2>🐳 Docker Support</h2>
-      <p class="muted">Dockerfile detection and container management.</p>
-      {% if project.has_docker %}
-      <p style="color:#6ee7b7">✅ Dockerfile detected</p>
-      <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn btn-primary btn-sm">🐳 Build Image</button>
-        <button class="btn btn-ok btn-sm">▶ Run Container</button>
-        <button class="btn btn-danger btn-sm">⏹ Stop Container</button>
+      <div style="margin-top:10px;padding:10px;background:rgba(10,14,32,0.5);border-radius:8px;border:1px solid var(--border)">
+        <p class="muted" style="margin:0;font-size:12px">
+          💡 <b>Tip:</b> If your app crashes repeatedly, check your code for errors.
+          Auto-restart helps keep your app running but won't fix logic errors.
+        </p>
       </div>
-      {% else %}
-      <p class="muted">No Dockerfile found in project.</p>
-      <p class="muted" style="font-size:13px">Upload a <code>Dockerfile</code> to enable Docker support.</p>
-      {% endif %}
     </div>
   </div>
 </div>
@@ -306,6 +227,73 @@ function showTab(tab) {
   
   document.getElementById(`panel-${tab}`).style.display = 'block';
   document.getElementById(`tab-${tab}`).style.borderBottom = '2px solid var(--primary)';
+}
+
+// ==================== START / STOP / RESTART PROJECT ====================
+async function startProject() {
+    const projectId = '{{project.id}}';
+    if (!confirm('🚀 Start this project?')) return;
+    
+    try {
+        const response = await fetch(`/project/${projectId}/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await response.json();
+        
+        if (result.success) {
+            alert('✅ Project started successfully on port ' + result.port);
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            alert('❌ Failed to start: ' + result.error);
+        }
+    } catch (error) {
+        alert('❌ Error: ' + error.message);
+    }
+}
+
+async function stopProject() {
+    const projectId = '{{project.id}}';
+    if (!confirm('⏹ Stop this project?')) return;
+    
+    try {
+        const response = await fetch(`/project/${projectId}/stop`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await response.json();
+        
+        if (result.success) {
+            alert('✅ Project stopped successfully');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            alert('❌ Failed to stop: ' + result.error);
+        }
+    } catch (error) {
+        alert('❌ Error: ' + error.message);
+    }
+}
+
+async function restartProject() {
+    const projectId = '{{project.id}}';
+    if (!confirm('🔄 Restart this project?')) return;
+    
+    try {
+        const response = await fetch(`/project/${projectId}/restart`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await response.json();
+        
+        if (result.success) {
+            alert('✅ Project restarted successfully');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            alert('❌ Failed to restart: ' + result.error);
+        }
+    } catch (error) {
+        alert('❌ Error: ' + error.message);
+    }
 }
 
 // ==================== ENVIRONMENT VARIABLES ====================
