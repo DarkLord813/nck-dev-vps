@@ -336,9 +336,7 @@ class PortManager:
         if key in self.used_ports:
             del self.used_ports[key]
             return True
-        return False
-
-port_manager = PortManager()
+        return Falseport_manager = PortManager()
 
 # ==================== STORAGE ====================
 _lock = threading.Lock()
@@ -1250,6 +1248,30 @@ def file_view(name):
     project_dir = FILES_ROOT / u / project_id
     return send_from_directory(project_dir, secure_filename(name), as_attachment=False)
 
+@app.route("/logs")
+@require_user
+def logs_api():
+    u = current_user()
+    projects = get_user_projects(u)
+    project_id = list(projects.keys())[0] if projects else None
+    
+    if not project_id:
+        return jsonify({
+            "running": False,
+            "file": None,
+            "logs": ["No project found"],
+            "install": [],
+            "subscription": "Basic"
+        })
+    
+    return jsonify({
+        "running": is_project_running(u, project_id),
+        "file": None,
+        "logs": get_project_logs(u, project_id, 200),
+        "install": [],
+        "subscription": "Basic"
+    })
+
 # ==================== PROJECT ROUTES ====================
 
 @app.route("/projects")
@@ -1263,6 +1285,35 @@ def projects_list():
         project["cpu"] = resources["cpu"]
         project["ram_mb"] = resources["ram_mb"]
     return render_template("projects.html", username=u, projects=projects, total_projects=len(projects))
+
+@app.route("/project/create", methods=["GET"])
+@require_user
+def project_create_page():
+    """Show create project page"""
+    u = current_user()
+    users = load_users()
+    is_paid = users.get(u, {}).get("payment_status") == "paid"
+    return render_template("create_project.html", username=u, is_paid=is_paid)
+
+@app.route("/project/create", methods=["POST"])
+@require_user
+def project_create():
+    """Create a new project"""
+    u = current_user()
+    users = load_users()
+    if users.get(u, {}).get("payment_status") != "paid":
+        flash("Please subscribe to a plan!", "error")
+        return redirect(url_for("projects_list"))
+    
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip()
+    if not name:
+        flash("Project name is required!", "error")
+        return redirect(url_for("projects_list"))
+    
+    project_id = create_project(u, name, description)
+    flash(f"✅ Project '{name}' created!", "success")
+    return redirect(url_for("project_detail", project_id=project_id))
 
 @app.route("/project/<project_id>")
 @require_user
