@@ -776,7 +776,6 @@ def initialize_payment():
         
         print(f"💰 Payment request: username={username}, plan={plan_name}, email={email}, currency={currency}")
         
-        # If no email provided, try to get from users
         if not email:
             users = load_users()
             user_data = users.get(username, {})
@@ -789,7 +788,6 @@ def initialize_payment():
         
         pricing = load_pricing()
         
-        # Find the plan
         plan = None
         for p in pricing["plans"]:
             if p["name"].lower() == plan_name.lower():
@@ -799,14 +797,12 @@ def initialize_payment():
         if not plan:
             return jsonify({"error": f"Plan '{plan_name}' not found"}), 400
         
-        # Get price in selected currency
         currency_pricing = pricing.get("currency_pricing", {})
         if currency in currency_pricing and plan_name in currency_pricing[currency]:
             amount = float(currency_pricing[currency][plan_name])
         else:
             amount = float(plan["price"])
         
-        # Generate transaction reference
         tx_ref = f"VPS-{username}-{int(time.time())}-{secrets.token_hex(4)}"
         
         headers = {
@@ -987,7 +983,6 @@ def project_upload(project_id):
             file_path = project_dir / name
             file.save(file_path)
             
-            # Extract
             try:
                 if name.endswith('.zip'):
                     with zipfile.ZipFile(file_path, 'r') as zip_ref:
@@ -1149,7 +1144,6 @@ def project_enable_ssl(project_id):
     cert_dir.mkdir(parents=True, exist_ok=True)
     
     try:
-        # Generate SSL certificate
         k = crypto.PKey()
         k.generate_key(crypto.TYPE_RSA, 2048)
         
@@ -1265,6 +1259,149 @@ def project_delete(project_id):
     else:
         flash("Failed to delete project!", "error")
     return redirect(url_for("projects_list"))
+
+# ==================== USER WORKFLOW ROUTES ====================
+
+@app.route("/upload-requirements", methods=["POST"])
+@require_user
+def upload_requirements():
+    u = current_user()
+    users = load_users()
+    
+    if users.get(u, {}).get("payment_status") != "paid":
+        flash("Please subscribe to a plan to upload requirements!", "error")
+        return redirect(url_for("user_dashboard"))
+    
+    udir = user_dir(u)
+    
+    if 'requirements' not in request.files:
+        flash("No file uploaded!", "error")
+        return redirect(url_for("user_dashboard"))
+    
+    file = request.files['requirements']
+    if file.filename == '' or not file.filename.endswith('.txt'):
+        flash("Please upload a valid requirements.txt file!", "error")
+        return redirect(url_for("user_dashboard"))
+    
+    name = secure_filename(file.filename)
+    file.save(udir / name)
+    
+    try:
+        result = subprocess.run(
+            ['pip', 'install', '-r', str(udir / name)],
+            cwd=str(udir),
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        if result.returncode == 0:
+            flash(f"✅ Requirements installed successfully!", "success")
+        else:
+            flash(f"⚠️ Some packages failed to install: {result.stderr[:200]}", "warning")
+    except subprocess.TimeoutExpired:
+        flash("❌ Installation timed out. Some packages may be too large.", "error")
+    except Exception as e:
+        flash(f"❌ Error installing requirements: {str(e)}", "error")
+    
+    threading.Thread(target=lambda: manual_backup("Requirements uploaded"), daemon=True).start()
+    
+    return redirect(url_for("user_dashboard"))
+
+@app.route("/deploy-project", methods=["POST"])
+@require_user
+def deploy_project():
+    u = current_user()
+    users = load_users()
+    
+    if users.get(u, {}).get("payment_status") != "paid":
+        return jsonify({"success": False, "error": "Please subscribe to a plan to deploy!"}), 400
+    
+    udir = user_dir(u)
+    
+    # Get the main Python file
+    py_files = [f for f in udir.iterdir() if f.suffix == '.py']
+    if not py_files:
+        return jsonify({"success": False, "error": "No Python file found to deploy!"}), 400
+    
+    # Use the first Python file as main
+    main_file = py_files[0]
+    run_command = f"python {main_file.name}"
+    
+    # Save run command
+    with open(udir / "run_command.txt", 'w') as f:
+        f.write(run_command)
+    
+    # Install requirements if exists
+    req_file = udir / "requirements.txt"
+    if req_file.exists():
+        try:
+            subprocess.run(
+                ['pip', 'install', '-r', str(req_file)],
+                cwd=str(udir),
+                capture_output=True,
+                timeout=300
+            )
+        except:
+            pass
+    
+    threading.Thread(target=lambda: manual_backup(f"Project deployed by {u}"), daemon=True).start()
+    
+    return jsonify({"success": True, "message": f"Deployed {main_file.name} successfully!"})
+
+@app.route("/get-env-vars")
+@require_user
+def get_env_vars():
+    u = current_user()
+    udir = user_dir(u)
+    env_file = udir / ".env"
+    
+    env_vars = []
+    if env_file.exists():
+        with open(env_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    parts = line.split('=', 1)
+                    if len(parts) == 2:
+                        env_vars.append({"key": parts[0].strip(), "value": parts[1].strip()})
+    
+    return jsonify({"env_vars": env_vars})
+
+@app.route("/save-env-vars", methods=["POST"])
+@require_user
+def save_env_vars():
+    u = current_user()
+    udir = user_dir(u)
+    env_file = udir / ".env"
+    
+    data = request.json
+    env_vars = data.get("env_vars", [])
+    
+    try:
+        with open(env_file, 'w') as f:
+            for env in env_vars:
+                f.write(f"{env['key']}={env['value']}\n")
+        
+        threading.Thread(target=lambda: manual_backup("Environment variables saved"), daemon=True).start()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/clear-env-vars", methods=["POST"])
+@require_user
+def clear_env_vars():
+    u = current_user()
+    udir = user_dir(u)
+    env_file = udir / ".env"
+    
+    try:
+        if env_file.exists():
+            env_file.unlink()
+        threading.Thread(target=lambda: manual_backup("Environment variables cleared"), daemon=True).start()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ==================== OWNER ROUTES ====================
 
@@ -1401,7 +1538,6 @@ def owner_pricing():
 @app.route("/owner/update_subscription/<username>", methods=["POST"])
 @require_owner
 def owner_update_subscription(username):
-    """Update a user's subscription plan"""
     subscription = request.form.get("subscription", "Basic")
     users = load_users()
     if username in users:
@@ -1495,7 +1631,7 @@ def upload():
             name = secure_filename(f.filename)
             if name:
                 f.save(udir / name)
-    flash("Files uploaded!", "success")
+    flash("Files uploaded successfully!", "success")
     return redirect(url_for("user_dashboard"))
 
 @app.route("/file/delete/<name>", methods=["POST"])
