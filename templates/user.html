@@ -21,6 +21,7 @@
       <a href="/project/{{project_id}}" class="btn btn-primary btn-sm">📂 Open Project</a>
       {% endif %}
       <a href="/projects" class="btn btn-ghost btn-sm">📁 All Projects</a>
+      <a href="/logout" class="btn btn-danger btn-sm">Logout</a>
     </div>
   </div>
 
@@ -85,7 +86,7 @@
           <span>📄 {{f}}</span>
           <span class="row" style="gap:6px">
             <a href="/file/view/{{f}}" target="_blank"><button class="btn btn-ghost btn-sm" type="button">View</button></a>
-            <form class="inline" method="post" action="/file/delete/{{f}}" onsubmit="return confirm('Delete {{f}}?')">
+            <form class="inline" method="post" action="/project/{{project_id}}/file/delete/{{f}}" onsubmit="return confirm('Delete {{f}}?')">
               <button class="btn btn-danger btn-sm">×</button>
             </form>
           </span>
@@ -285,8 +286,6 @@ async function deployProject() {
 
 // ==================== REQUIREMENTS STATUS ====================
 function loadRequirementsStatus() {
-    const status = document.getElementById('requirements-status');
-    // Check if requirements file exists by looking at file list
     // This is handled by the form submit event below
 }
 
