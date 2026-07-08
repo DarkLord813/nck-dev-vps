@@ -10,6 +10,30 @@
     </div>
   </div>
 
+  <!-- System Stats -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:20px">
+    <div class="card" style="text-align:center;padding:14px">
+      <div style="font-size:28px">👥</div>
+      <div style="font-size:24px;font-weight:700">{{users|length}}</div>
+      <div class="muted" style="font-size:12px">Total Users</div>
+    </div>
+    <div class="card" style="text-align:center;padding:14px">
+      <div style="font-size:28px">📁</div>
+      <div style="font-size:24px;font-weight:700">{{total_projects or 0}}</div>
+      <div class="muted" style="font-size:12px">Total Projects</div>
+    </div>
+    <div class="card" style="text-align:center;padding:14px">
+      <div style="font-size:28px">💾</div>
+      <div style="font-size:24px;font-weight:700">{{backup_info.backup_count or 0}}</div>
+      <div class="muted" style="font-size:12px">Backups</div>
+    </div>
+    <div class="card" style="text-align:center;padding:14px">
+      <div style="font-size:28px">🟢</div>
+      <div style="font-size:24px;font-weight:700">{{ backup_info.enabled and '✅' or '❌' }}</div>
+      <div class="muted" style="font-size:12px">GitHub Backup</div>
+    </div>
+  </div>
+
   <!-- ==================== CREATE USER ==================== -->
   <div class="card">
     <h2>➕ Create User</h2>
@@ -18,9 +42,9 @@
       <input name="email" type="email" placeholder="Email" required>
       <input name="password" placeholder="Password" required>
       <select name="subscription" style="max-width:140px">
-        <option value="Basic">Basic (₦2,500/mo) - 1 project</option>
-        <option value="Pro" selected>Pro (₦15,000/yr) - 5 projects</option>
-        <option value="Premium">Premium (₦25,000/yr) - 20 projects</option>
+        <option value="Basic">Basic (₦2,500/mo)</option>
+        <option value="Pro" selected>Pro (₦15,000/yr)</option>
+        <option value="Premium">Premium (₦25,000/yr)</option>
       </select>
       <button class="btn btn-primary">Create User</button>
     </form>
@@ -29,7 +53,7 @@
   <!-- ==================== REGISTERED USERS ==================== -->
   <div class="card">
     <h2>👥 Registered Users ({{users|length}})</h2>
-    {% if not users %}<p class="muted">No users yet. Create one above or users can self-register.</p>{% endif %}
+    {% if not users %}<p class="muted">No users yet.</p>{% endif %}
     {% if users %}
     <div style="overflow-x:auto">
     <table>
@@ -39,7 +63,7 @@
         <th>Subscription</th>
         <th>Status</th>
         <th>Created</th>
-        <th>Auto-login Link</th>
+        <th>Projects</th>
         <th>Actions</th>
       </tr>
       {% for name, u in users.items() %}
@@ -58,7 +82,7 @@
           {% endif %}
         </td>
         <td class="muted" style="font-size:12px">{{ (u.created_at or 0)|int|string|truncate(20) }}</td>
-        <td><a href="{{base_url}}/auto/{{u.token}}" target="_blank" style="font-size:11px;word-break:break-all">{{base_url}}/auto/{{u.token}}</a></td>
+        <td><span class="badge badge-subscription">{{ u.projects_count or 0 }}</span></td>
         <td>
           <div style="display:flex;flex-direction:column;gap:4px">
             <div style="display:flex;gap:4px;flex-wrap:wrap">
@@ -70,7 +94,7 @@
                 </select>
                 <button class="btn btn-ok btn-sm">Update</button>
               </form>
-              <form class="inline" method="post" action="/owner/delete/{{name}}" onsubmit="return confirm('Delete {{name}}? This will remove all their files!')">
+              <form class="inline" method="post" action="/owner/delete/{{name}}" onsubmit="return confirm('Delete {{name}}?')">
                 <button class="btn btn-danger btn-sm">Delete</button>
               </form>
             </div>
@@ -80,7 +104,7 @@
                   <button class="btn btn-ok btn-sm" style="font-size:10px">🔓 Unban</button>
                 </form>
               {% else %}
-                <form class="inline" method="post" action="/owner/ban/{{name}}" onsubmit="return confirm('Ban {{name}}? They will not be able to login or access their projects.')">
+                <form class="inline" method="post" action="/owner/ban/{{name}}" onsubmit="return confirm('Ban {{name}}?')">
                   <button class="btn btn-danger btn-sm" style="font-size:10px">🚫 Ban</button>
                 </form>
               {% endif %}
@@ -94,87 +118,73 @@
     {% endif %}
   </div>
 
-  <!-- ==================== BULK USER MANAGEMENT ==================== -->
+  <!-- ==================== BULK USER ACTIONS ==================== -->
   <div class="card">
     <h2>⚡ Bulk User Actions</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <form method="post" action="/owner/unban-all" onsubmit="return confirm('Unban ALL users? This will restore access to all banned users.')">
-        <button class="btn btn-ok">🔓 Unban All Users</button>
+      <form method="post" action="/owner/unban-all" onsubmit="return confirm('Unban ALL users?')">
+        <button class="btn btn-ok">🔓 Unban All</button>
       </form>
-      <form method="post" action="/owner/ban-all" onsubmit="return confirm('⚠️ Ban ALL users? Only the owner will have access. This is a severe action!')">
-        <button class="btn btn-danger">🚫 Ban All Users</button>
+      <form method="post" action="/owner/ban-all" onsubmit="return confirm('⚠️ Ban ALL users?')">
+        <button class="btn btn-danger">🚫 Ban All</button>
       </form>
       <button class="btn btn-ghost" onclick="location.reload()">🔄 Refresh</button>
     </div>
-    <p class="muted" style="margin-top:8px;font-size:12px">💡 Banning a user prevents them from logging in or accessing their projects. The owner is never banned.</p>
   </div>
 
-  <!-- ==================== IP BLOCKING MANAGEMENT ==================== -->
+  <!-- ==================== IP BLOCKING ==================== -->
   <div class="card">
-    <h2>🛡️ IP Blocking Management</h2>
-    <p class="muted">Manage blocked IP addresses from rate limiting and brute force protection</p>
-    
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+    <h2>🛡️ IP Blocking</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
       <form method="post" action="/admin/block-ip" class="row" style="flex:1">
-        <input name="ip" placeholder="IP Address to block" required style="flex:1;min-width:120px">
+        <input name="ip" placeholder="IP Address" required style="flex:1;min-width:120px">
         <input name="reason" placeholder="Reason" style="flex:1;min-width:120px">
         <button class="btn btn-danger">🚫 Block IP</button>
       </form>
       <form method="post" action="/admin/unblock-all-ips">
-        <button class="btn btn-ok">🔓 Unblock All IPs</button>
+        <button class="btn btn-ok">🔓 Unblock All</button>
       </form>
-      <button class="btn btn-ghost" onclick="fetchBlockedIPs()">📊 View Blocked IPs</button>
+      <button class="btn btn-ghost" onclick="fetchBlockedIPs()">📊 View Blocked</button>
     </div>
-    
-    <div id="blocked-ips-list" style="background:rgba(10,14,32,0.5);border-radius:10px;padding:14px;border:1px solid var(--border);max-height:200px;overflow-y:auto">
-      <p class="muted" style="margin:0">Click "View Blocked IPs" to see currently blocked IPs.</p>
+    <div id="blocked-ips-list" style="margin-top:10px;background:rgba(10,14,32,0.5);border-radius:10px;padding:14px;border:1px solid var(--border);max-height:150px;overflow-y:auto">
+      <p class="muted">Click "View Blocked" to see blocked IPs.</p>
     </div>
   </div>
 
   <!-- ==================== BACKUP PANEL ==================== -->
   <div class="card" id="backup">
-    <h2>💾 Versioned GitHub Backup System</h2>
+    <h2>💾 GitHub Backup</h2>
     <p class="muted">
-      🚀 <b>Auto-Backup:</b> Every user registration, payment, file upload, or data change is automatically backed up.<br>
-      🔄 <b>Auto-Restore:</b> On every service restart, data is automatically restored from GitHub.<br>
-      📋 <b>Versioned:</b> Keeps last 10 versions (<code>database.json</code>, <code>database(1).json</code>, etc.)
+      🚀 Auto-backup every change | 🔄 Auto-restore on startup | 📋 Versioned (last 10)
     </p>
-    
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-      <form method="post" action="/admin/backup" style="display:inline">
+      <form method="post" action="/admin/backup">
         <button class="btn btn-primary">💾 Backup Now</button>
       </form>
-      <form method="post" action="/admin/restore" style="display:inline" 
-            onsubmit="return confirm('⚠️ Restore will REPLACE ALL current data with latest GitHub backup. Continue?')">
-        <button class="btn btn-warn">🔄 Restore Latest</button>
+      <form method="post" action="/admin/restore" onsubmit="return confirm('⚠️ Restore ALL data from GitHub?')">
+        <button class="btn btn-warn">🔄 Restore</button>
       </form>
-      <form method="post" action="/admin/force-restore" style="display:inline" 
-            onsubmit="return confirm('⚠️ FORCE RESTORE will REPLACE ALL current data even if local data exists. Continue?')">
-        <button class="btn btn-danger">🔴 Force Restore</button>
-      </form>
-      <button class="btn btn-ghost" onclick="checkBackupStatus()">📊 Check Status</button>
+      <button class="btn btn-ghost" onclick="checkBackupStatus()">📊 Status</button>
     </div>
-    
     <div id="backup-status-display" style="background:rgba(10,14,32,0.5);border-radius:10px;padding:14px;border:1px solid var(--border)">
-      <p class="muted" style="margin:0">Click "Check Status" to see backup information.</p>
+      <p class="muted">Click "Status" to see backup info.</p>
     </div>
   </div>
 
   <!-- ==================== PRICING EDITOR ==================== -->
   <div class="card" id="pricing">
-    <h2>💰 Pricing Plans Editor</h2>
-    <p class="muted">These plans appear on the public Home & Pricing pages.</p>
+    <h2>💰 Pricing Editor</h2>
     <form method="post" action="/owner/pricing">
       <div class="row" style="margin-bottom:14px">
         <label style="display:flex;flex-direction:column;gap:4px"><span class="muted">Currency</span>
           <input name="currency" value="{{pricing.currency}}" style="width:80px"></label>
-        <label style="flex:1;display:flex;flex-direction:column;gap:4px"><span class="muted">Contact (where users buy)</span>
-          <input name="contact" value="{{pricing.contact}}" placeholder="Telegram / WhatsApp / Email"></label>
+        <label style="flex:1;display:flex;flex-direction:column;gap:4px"><span class="muted">Contact</span>
+          <input name="contact" value="{{pricing.contact}}" placeholder="Telegram / WhatsApp"></label>
       </div>
       <div id="plans">
       {% for p in pricing.plans %}
         <div class="row" style="margin-bottom:8px;padding:10px;background:rgba(10,14,32,0.5);border-radius:10px;border:1px solid var(--border)">
-          <input name="p_name" value="{{p.name}}" placeholder="Plan name" style="max-width:140px">
+          <input name="p_name" value="{{p.name}}" placeholder="Plan" style="max-width:140px">
           <input name="p_duration" value="{{p.duration}}" placeholder="Duration" style="max-width:130px">
           <input name="p_price" value="{{p.price}}" placeholder="Price" style="max-width:90px">
           <input name="p_features" value="{{p.features}}" placeholder="Features">
@@ -184,19 +194,18 @@
       </div>
       <div style="margin-top:12px;display:flex;gap:10px">
         <button type="button" class="btn btn-ghost" onclick="addPlan()">+ Add Plan</button>
-        <button class="btn btn-primary">💾 Save Pricing</button>
+        <button class="btn btn-primary">💾 Save</button>
       </div>
     </form>
   </div>
 </div>
 
 <script>
-// ==================== ADD PLAN ====================
 function addPlan() {
   const d = document.createElement('div');
   d.className = 'row';
   d.style.cssText = 'margin-bottom:8px;padding:10px;background:rgba(10,14,32,0.5);border-radius:10px;border:1px solid var(--border)';
-  d.innerHTML = `<input name="p_name" placeholder="Plan name" style="max-width:140px">
+  d.innerHTML = `<input name="p_name" placeholder="Plan" style="max-width:140px">
     <input name="p_duration" placeholder="Duration" style="max-width:130px">
     <input name="p_price" placeholder="Price" style="max-width:90px">
     <input name="p_features" placeholder="Features">
@@ -204,84 +213,42 @@ function addPlan() {
   document.getElementById('plans').appendChild(d);
 }
 
-// ==================== BACKUP FUNCTIONS ====================
 async function checkBackupStatus() {
-    const statusDiv = document.getElementById('backup-status-display');
-    statusDiv.innerHTML = '<p class="muted">Checking backup status...</p>';
-    
-    try {
-        const response = await fetch('/admin/backup-status');
-        const data = await response.json();
-        
-        if (data.enabled) {
-            let statusHtml = `<p style="color:#6ee7b7">✅ GitHub backup is ACTIVE!</p>`;
-            statusHtml += `<p class="muted">📦 Data exists: ${data.has_data ? '✅ Yes' : '❌ No'}</p>`;
-            statusHtml += `<p class="muted">🔢 Total backups performed: <strong>${data.backup_count || 0}</strong></p>`;
-            statusHtml += `<p class="muted">📁 Repository: <strong>DarkLord813/${data.repo_name || 'nck-vps-backup'}</strong></p>`;
-            
-            if (data.users !== undefined) {
-                statusHtml += `<p class="muted">👥 Users in backup: <strong>${data.users}</strong></p>`;
-            }
-            
-            if (data.last_backup && data.last_backup !== 'Never') {
-                statusHtml += `<p class="muted">📅 Last backup: <strong>${new Date(data.last_backup).toLocaleString()}</strong></p>`;
-            }
-            
-            statusHtml += `<p class="muted" style="font-size:11px;margin-top:8px">
-                🔄 Auto-restore: Enabled on every service restart<br>
-                📋 Versions kept: Last 10
-            </p>`;
-            
-            statusDiv.innerHTML = statusHtml;
-        } else {
-            statusDiv.innerHTML = `
-                <p style="color:#fca5a5">❌ GitHub backup is not configured.</p>
-                <p class="muted">Set these environment variables:</p>
-                <ul style="color:var(--muted);font-size:13px;margin:5px 0">
-                    <li><code>GITHUB_TOKEN</code> - Your GitHub Personal Access Token</li>
-                    <li><code>GITHUB_REPO_NAME</code> - Repository name (e.g., nck-vps-backup)</li>
-                    <li><code>GITHUB_BACKUP_PATH</code> - e.g., <code>backups/database.json</code></li>
-                </ul>
-                <p class="muted" style="margin-top:5px">💡 <code>GITHUB_REPO_OWNER</code> is hardcoded as: <strong>DarkLord813</strong></p>
-            `;
-        }
-    } catch (error) {
-        statusDiv.innerHTML = `<p style="color:#fca5a5">Error checking backup status: ${error.message}</p>`;
-    }
+  const div = document.getElementById('backup-status-display');
+  div.innerHTML = '<p class="muted">Loading...</p>';
+  try {
+    const r = await fetch('/admin/backup-status');
+    const data = await r.json();
+    div.innerHTML = `
+      <p style="color:#6ee7b7">✅ GitHub backup ${data.enabled ? 'ACTIVE' : 'DISABLED'}</p>
+      <p class="muted">📊 Backups: ${data.backup_count || 0}</p>
+      <p class="muted">📁 Repo: ${data.repo_owner}/${data.repo_name}</p>
+      ${data.last_error ? `<p style="color:#fca5a5">❌ Error: ${data.last_error}</p>` : ''}
+    `;
+  } catch(e) {
+    div.innerHTML = `<p style="color:#fca5a5">❌ Error: ${e.message}</p>`;
+  }
 }
 
-// ==================== IP BLOCKING FUNCTIONS ====================
 async function fetchBlockedIPs() {
-    const listDiv = document.getElementById('blocked-ips-list');
-    listDiv.innerHTML = '<p class="muted">Loading blocked IPs...</p>';
-    
-    try {
-        const response = await fetch('/admin/blocked-ips');
-        const data = await response.json();
-        
-        if (data.blocked_ips && data.blocked_ips.length > 0) {
-            let html = '<div style="display:flex;flex-direction:column;gap:6px">';
-            data.blocked_ips.forEach(ip => {
-                html += `
-                    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:rgba(239,68,68,0.1);border-radius:6px;border:1px solid rgba(239,68,68,0.2)">
-                        <span><code style="color:#fca5a5">${ip.ip}</code> ${ip.reason ? `<span class="muted">- ${ip.reason}</span>` : ''}</span>
-                        <span class="muted" style="font-size:11px">Expires: ${ip.expires || 'Never'}</span>
-                    </div>
-                `;
-            });
-            html += '</div>';
-            listDiv.innerHTML = html;
-        } else {
-            listDiv.innerHTML = '<p style="color:#6ee7b7">✅ No IPs currently blocked.</p>';
-        }
-    } catch (error) {
-        listDiv.innerHTML = `<p style="color:#fca5a5">Error fetching blocked IPs: ${error.message}</p>`;
+  const div = document.getElementById('blocked-ips-list');
+  div.innerHTML = '<p class="muted">Loading...</p>';
+  try {
+    const r = await fetch('/admin/blocked-ips');
+    const data = await r.json();
+    if (data.blocked_ips && data.blocked_ips.length > 0) {
+      div.innerHTML = data.blocked_ips.map(ip => `
+        <div style="display:flex;justify-content:space-between;padding:6px 10px;background:rgba(239,68,68,0.1);border-radius:6px;margin-bottom:4px;border:1px solid rgba(239,68,68,0.2)">
+          <span><code style="color:#fca5a5">${ip.ip}</code> ${ip.reason ? `- ${ip.reason}` : ''}</span>
+          <span class="muted" style="font-size:11px">${ip.expires || 'Permanent'}</span>
+        </div>
+      `).join('');
+    } else {
+      div.innerHTML = '<p style="color:#6ee7b7">✅ No IPs blocked.</p>';
     }
+  } catch(e) {
+    div.innerHTML = `<p style="color:#fca5a5">❌ Error: ${e.message}</p>`;
+  }
 }
-
-// Auto-check backup status on page load
-document.addEventListener('DOMContentLoaded', function() {
-    checkBackupStatus();
-});
 </script>
 {% endblock %}
