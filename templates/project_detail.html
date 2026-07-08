@@ -12,7 +12,7 @@
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <a href="/projects" class="btn btn-ghost btn-sm">📂 All Projects</a>
-      <form method="post" action="/project/{{project.id}}/delete" onsubmit="return confirm('Delete this project and all files?')" style="display:inline">
+      <form method="post" action="/project/{{project.id}}/delete" onsubmit="return confirm('Delete this project?')" style="display:inline">
         <button class="btn btn-danger btn-sm">🗑️ Delete</button>
       </form>
     </div>
@@ -21,15 +21,38 @@
   <!-- Project Status -->
   <div class="card" style="margin-bottom:18px">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-      <div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
         <span class="badge badge-subscription">📊 {{project.files|length}} files</span>
         {% if project.is_running %}
         <span class="badge badge-on">🟢 Running</span>
         {% else %}
         <span class="badge badge-off">🔴 Stopped</span>
         {% endif %}
+        {% if project.port %}
+        <span class="badge" style="background:rgba(99,102,241,0.18);color:#a5b4fc;border:1px solid rgba(99,102,241,0.35)">
+          🔌 Port: {{project.port}}
+        </span>
+        {% endif %}
+        {% if project.custom_domain %}
+        <span class="badge" style="background:rgba(16,185,129,0.18);color:#6ee7b7;border:1px solid rgba(16,185,129,0.35)">
+          🌐 {{project.custom_domain}}
+        </span>
+        {% endif %}
+        {% if project.has_ssl %}
+        <span class="badge" style="background:rgba(16,185,129,0.18);color:#6ee7b7;border:1px solid rgba(16,185,129,0.35)">
+          🔒 SSL
+        </span>
+        {% endif %}
+        {% if project.has_database %}
+        <span class="badge" style="background:rgba(16,185,129,0.18);color:#6ee7b7;border:1px solid rgba(16,185,129,0.35)">
+          🗄️ Database
+        </span>
+        {% endif %}
+        {% if project.restart_on_crash %}
+        <span class="badge badge-on">🔄 Auto-Restart</span>
+        {% endif %}
       </div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         {% if project.is_running %}
         <form method="post" action="/project/{{project.id}}/stop" style="display:inline">
           <button class="btn btn-warn btn-sm">⏹ Stop</button>
@@ -39,22 +62,50 @@
           <button class="btn btn-ok btn-sm">▶ Start</button>
         </form>
         {% endif %}
-        <button class="btn btn-ghost btn-sm" onclick="refreshLogs()">🔄 Refresh Logs</button>
+        <button class="btn btn-ghost btn-sm" onclick="refreshAll()">🔄 Refresh</button>
+      </div>
+    </div>
+    <!-- CPU/RAM Display -->
+    <div style="display:flex;gap:20px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+      <div>
+        <span class="muted" style="font-size:12px">💻 CPU</span>
+        <div style="font-size:18px;font-weight:700" id="cpu-display">{{ project.cpu or 0 }}%</div>
+      </div>
+      <div>
+        <span class="muted" style="font-size:12px">🧠 RAM</span>
+        <div style="font-size:18px;font-weight:700" id="ram-display">{{ project.ram_mb or 0 }} MB</div>
+      </div>
+      <div>
+        <span class="muted" style="font-size:12px">⏱️ Uptime</span>
+        <div style="font-size:18px;font-weight:700" id="uptime-display">--</div>
       </div>
     </div>
   </div>
 
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
-    <!-- Left Column -->
-    <div>
-      <!-- Upload Files -->
+  <!-- Tabs -->
+  <div style="display:flex;gap:4px;margin-bottom:18px;flex-wrap:wrap;border-bottom:1px solid var(--border)">
+    <button class="btn btn-ghost btn-sm" onclick="showTab('files')" id="tab-files" style="border-bottom:2px solid var(--primary)">📁 Files</button>
+    <button class="btn btn-ghost btn-sm" onclick="showTab('settings')" id="tab-settings">⚙️ Settings</button>
+    <button class="btn btn-ghost btn-sm" onclick="showTab('env')" id="tab-env">🔑 Env Vars</button>
+    <button class="btn btn-ghost btn-sm" onclick="showTab('logs')" id="tab-logs">📜 Logs</button>
+    <button class="btn btn-ghost btn-sm" onclick="showTab('database')" id="tab-database">🗄️ Database</button>
+    <button class="btn btn-ghost btn-sm" onclick="showTab('ssl')" id="tab-ssl">🔒 SSL</button>
+    <button class="btn btn-ghost btn-sm" onclick="showTab('worker')" id="tab-worker">⚡ Worker</button>
+    <button class="btn btn-ghost btn-sm" onclick="showTab('docker')" id="tab-docker">🐳 Docker</button>
+  </div>
+
+  <!-- ==================== TAB: FILES ==================== -->
+  <div id="panel-files" class="tab-panel">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+      <!-- Upload -->
       <div class="card">
-        <h2>📤 Upload Files</h2>
+        <h2>📤 Upload</h2>
         <form method="post" action="/project/{{project.id}}/upload" enctype="multipart/form-data" class="row">
           <input type="file" name="files" multiple required style="flex:1">
           <button class="btn btn-primary">Upload</button>
         </form>
-        <p class="muted" style="margin:8px 0 0">.py · .js · .sh · .txt · .json · any (max 200MB)</p>
+        <p class="muted" style="margin:8px 0 0">.py · .js · .sh · .zip · .tar.gz · any</p>
+        <p class="muted" style="margin:4px 0 0">📦 ZIP/TAR files auto-extract!</p>
       </div>
 
       <!-- Files List -->
@@ -65,149 +116,291 @@
           <li style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px">
             <span>📄 {{f}}</span>
             <span class="row" style="gap:6px">
-              <a href="/file/view/{{f}}" target="_blank"><button class="btn btn-ghost btn-sm" type="button">View</button></a>
+              <a href="/file/view/{{f}}" target="_blank"><button class="btn btn-ghost btn-sm">View</button></a>
               <form method="post" action="/project/{{project.id}}/file/delete/{{f}}" onsubmit="return confirm('Delete {{f}}?')" style="display:inline">
                 <button class="btn btn-danger btn-sm">×</button>
               </form>
             </span>
           </li>
           {% else %}
-          <li class="muted" style="padding:14px;text-align:center">No files yet. Upload files above.</li>
+          <li class="muted" style="padding:14px;text-align:center">No files yet.</li>
           {% endfor %}
         </ul>
       </div>
+    </div>
+  </div>
 
-      <!-- Run Command -->
-      <div class="card">
-        <h2>⚙️ Run Command</h2>
-        <form method="post" action="/project/{{project.id}}/save-run-command" class="row">
-          <input name="run_command" placeholder="python main.py" value="{{project.run_command or ''}}" required style="flex:1">
-          <button class="btn btn-primary">Save</button>
-        </form>
-        <p class="muted" style="margin:8px 0 0">💡 The command to start your bot/application</p>
-      </div>
+  <!-- ==================== TAB: SETTINGS ==================== -->
+  <div id="panel-settings" class="tab-panel" style="display:none">
+    <div class="card">
+      <h2>⚙️ Run Command</h2>
+      <form method="post" action="/project/{{project.id}}/save-run-command" class="row">
+        <input name="run_command" placeholder="python main.py" value="{{project.run_command or ''}}" required style="flex:1">
+        <button class="btn btn-primary">Save</button>
+      </form>
+      <p class="muted" style="margin:8px 0 0">💡 The command to start your app</p>
     </div>
 
-    <!-- Right Column -->
-    <div>
-      <!-- Environment Variables -->
-      <div class="card">
-        <h2>🔑 Environment Variables</h2>
-        <form id="env-form" onsubmit="return addEnvVar(event)">
-          <div class="row" style="margin-bottom:8px">
-            <input id="env-key" placeholder="KEY" style="flex:1;min-width:80px">
-            <input id="env-value" placeholder="value" style="flex:1;min-width:80px">
-            <button class="btn btn-primary btn-sm" type="submit">➕ Add</button>
-          </div>
-        </form>
-        <div id="env-list" style="margin-top:8px;max-height:200px;overflow-y:auto;font-size:13px;"></div>
-        <button class="btn btn-ok btn-sm" onclick="saveEnvVars()" style="margin-top:8px">💾 Save</button>
-      </div>
+    <div class="card">
+      <h2>🌐 Custom Domain</h2>
+      <form method="post" action="/project/{{project.id}}/custom-domain" class="row">
+        <input name="domain" placeholder="myapp.example.com" value="{{project.custom_domain or ''}}" style="flex:1">
+        <button class="btn btn-primary">Set</button>
+      </form>
+      {% if project.custom_domain %}
+      <p class="muted" style="margin:8px 0 0">✅ Domain: <strong>{{project.custom_domain}}</strong></p>
+      {% endif %}
+    </div>
 
-      <!-- Logs -->
-      <div class="card">
-        <h2>📜 Logs</h2>
-        <div id="logs" style="background:#04060d;color:#a6f3a6;font-family:'JetBrains Mono',monospace;font-size:12px;padding:14px;border-radius:10px;height:350px;overflow:auto;white-space:pre-wrap;border:1px solid var(--border)">Waiting for output...</div>
+    <div class="card">
+      <h2>🔄 Auto-Restart on Crash</h2>
+      <form method="post" action="/project/{{project.id}}/toggle-restart">
+        <button class="btn {% if project.restart_on_crash %}btn-warn{% else %}btn-ok{% endif %}">
+          {% if project.restart_on_crash %}Disable{% else %}Enable{% endif %} Auto-Restart
+        </button>
+      </form>
+      <p class="muted" style="margin:8px 0 0">
+        {% if project.restart_on_crash %}
+        ✅ Auto-restart enabled (max 5 restarts)
+        {% else %}
+        ❌ Auto-restart disabled
+        {% endif %}
+        {% if project.crash_count and project.crash_count > 0 %}
+        | 💥 Crashes: {{project.crash_count}}
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  <!-- ==================== TAB: ENV VARS ==================== -->
+  <div id="panel-env" class="tab-panel" style="display:none">
+    <div class="card">
+      <h2>🔑 Environment Variables</h2>
+      <form id="env-form" onsubmit="return addEnvVar(event)">
+        <div class="row" style="margin-bottom:8px">
+          <input id="env-key" placeholder="KEY" style="flex:1;min-width:80px">
+          <input id="env-value" placeholder="value" style="flex:1;min-width:80px">
+          <button class="btn btn-primary btn-sm" type="submit">➕ Add</button>
+        </div>
+      </form>
+      <div id="env-list" style="margin-top:8px;max-height:200px;overflow-y:auto;font-size:13px;"></div>
+      <button class="btn btn-ok btn-sm" onclick="saveEnvVars()" style="margin-top:8px">💾 Save</button>
+    </div>
+  </div>
+
+  <!-- ==================== TAB: LOGS ==================== -->
+  <div id="panel-logs" class="tab-panel" style="display:none">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+        <h2 style="margin:0">📜 Logs</h2>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="refreshLogs()">🔄 Refresh</button>
+          <a href="/project/{{project.id}}/logs/download" class="btn btn-ok btn-sm">📥 Download</a>
+        </div>
       </div>
+      <div id="logs-container" style="background:#04060d;color:#a6f3a6;font-family:'JetBrains Mono',monospace;font-size:12px;padding:14px;border-radius:10px;height:400px;overflow:auto;white-space:pre-wrap;border:1px solid var(--border)">Loading logs...</div>
+    </div>
+  </div>
+
+  <!-- ==================== TAB: DATABASE ==================== -->
+  <div id="panel-database" class="tab-panel" style="display:none">
+    <div class="card">
+      <h2>🗄️ Database</h2>
+      {% if project.has_database %}
+      <p style="color:#6ee7b7">✅ Database: <strong>{{project.database_type or 'SQLite'}}</strong></p>
+      <p class="muted">📁 Path: <code>data.db</code></p>
+      <div style="margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="alert('Database file: data.db')">📊 View Schema</button>
+        <button class="btn btn-danger btn-sm" onclick="if(confirm('Delete database?')) alert('Deletion not implemented')">🗑️ Drop</button>
+      </div>
+      {% else %}
+      <p class="muted">No database created yet.</p>
+      <form method="post" action="/project/{{project.id}}/create-database" class="row">
+        <select name="db_type" style="max-width:150px">
+          <option value="sqlite">SQLite</option>
+          <option value="postgres" disabled>PostgreSQL (Coming Soon)</option>
+          <option value="mysql" disabled>MySQL (Coming Soon)</option>
+        </select>
+        <button class="btn btn-primary">Create Database</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ==================== TAB: SSL ==================== -->
+  <div id="panel-ssl" class="tab-panel" style="display:none">
+    <div class="card">
+      <h2>🔒 SSL Certificate</h2>
+      {% if project.has_ssl %}
+      <p style="color:#6ee7b7">✅ SSL Enabled</p>
+      <p class="muted">🔗 <strong>{{project.custom_domain or 'No domain set'}}</strong></p>
+      <div style="margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="alert('SSL certificate generated successfully!')">📜 View Cert</button>
+        <button class="btn btn-danger btn-sm" onclick="if(confirm('Remove SSL?')) alert('Removal not implemented')">🗑️ Remove</button>
+      </div>
+      {% else %}
+      <p class="muted">SSL not configured.</p>
+      <p class="muted" style="font-size:13px">Set a custom domain first, then enable SSL.</p>
+      <form method="post" action="/project/{{project.id}}/enable-ssl">
+        <button class="btn btn-primary">🔒 Generate SSL</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ==================== TAB: WORKER ==================== -->
+  <div id="panel-worker" class="tab-panel" style="display:none">
+    <div class="card">
+      <h2>⚡ Background Worker</h2>
+      <form method="post" action="/project/{{project.id}}/save-worker-command" class="row">
+        <input name="worker_command" placeholder="python worker.py" value="{{project.worker_command or ''}}" style="flex:1">
+        <button class="btn btn-primary">Save</button>
+      </form>
+      <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+        <form method="post" action="/project/{{project.id}}/worker/start" style="display:inline">
+          <button class="btn btn-ok btn-sm">▶ Start Worker</button>
+        </form>
+        <form method="post" action="/project/{{project.id}}/worker/stop" style="display:inline">
+          <button class="btn btn-danger btn-sm">⏹ Stop Worker</button>
+        </form>
+      </div>
+      <p class="muted" style="margin-top:8px;font-size:12px">
+        Status: {% if project.worker_running %}🟢 Running{% else %}🔴 Stopped{% endif %}
+      </p>
+    </div>
+  </div>
+
+  <!-- ==================== TAB: DOCKER ==================== -->
+  <div id="panel-docker" class="tab-panel" style="display:none">
+    <div class="card">
+      <h2>🐳 Docker Support</h2>
+      <p class="muted">Dockerfile detection and container management.</p>
+      {% if project.has_docker %}
+      <p style="color:#6ee7b7">✅ Dockerfile detected</p>
+      <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm">🐳 Build Image</button>
+        <button class="btn btn-ok btn-sm">▶ Run Container</button>
+        <button class="btn btn-danger btn-sm">⏹ Stop Container</button>
+      </div>
+      {% else %}
+      <p class="muted">No Dockerfile found in project.</p>
+      <p class="muted" style="font-size:13px">Upload a <code>Dockerfile</code> to enable Docker support.</p>
+      {% endif %}
     </div>
   </div>
 </div>
 
-<script>
-// Environment Variables
-let envVars = {};
-
-function loadEnvVars() {
-    const projectId = '{{project.id}}';
-    fetch(`/project/${projectId}/env-vars`)
-        .then(r => r.json())
-        .then(data => {
-            envVars = data.env_vars || {};
-            renderEnvList();
-        })
-        .catch(() => {});
-}
-
-function addEnvVar(e) {
-    e.preventDefault();
-    const key = document.getElementById('env-key').value.trim();
-    const value = document.getElementById('env-value').value.trim();
-    
-    if (!key || !value) {
-        alert('Please enter both KEY and VALUE');
-        return false;
-    }
-    
-    envVars[key] = value;
-    renderEnvList();
-    document.getElementById('env-key').value = '';
-    document.getElementById('env-value').value = '';
-    return false;
-}
-
-function removeEnvVar(key) {
-    delete envVars[key];
-    renderEnvList();
-}
-
-function renderEnvList() {
-    const container = document.getElementById('env-list');
-    const keys = Object.keys(envVars);
-    
-    if (keys.length === 0) {
-        container.innerHTML = '<p class="muted">No environment variables set.</p>';
-        return;
-    }
-    
-    container.innerHTML = keys.map(key => `
-        <div class="env-item">
-            <span><span class="env-key">${key}</span> = <span class="env-value">${envVars[key]}</span></span>
-            <span class="env-remove" onclick="removeEnvVar('${key}')">✕</span>
-        </div>
-    `).join('');
-}
-
-function saveEnvVars() {
-    const projectId = '{{project.id}}';
-    fetch(`/project/${projectId}/save-env-vars`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ env_vars: envVars })
-    })
-    .then(r => r.json())
-    .then(data => {
-        if (data.success) {
-            alert('✅ Environment variables saved!');
-        } else {
-            alert('❌ Failed to save');
-        }
-    });
-}
-
-// Logs
-async function refreshLogs() {
-    const projectId = '{{project.id}}';
-    const logBox = document.getElementById('logs');
-    
-    try {
-        const r = await fetch(`/project/${projectId}/logs`);
-        const j = await r.json();
-        const atBottom = logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 30;
-        logBox.textContent = j.logs.length ? j.logs.join('\n') : 'Waiting for output...';
-        if (atBottom) logBox.scrollTop = logBox.scrollHeight;
-    } catch(e) {}
-}
-
-// Auto-refresh logs every 2 seconds
-setInterval(refreshLogs, 2000);
-setTimeout(loadEnvVars, 500);
-refreshLogs();
-</script>
-
 <style>
+.tab-panel { display: block; }
 .env-item{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:rgba(10,14,32,0.3);border-radius:6px;margin-bottom:4px;border:1px solid var(--border)}
 .env-item .env-key{color:#a5b4fc;font-weight:600}
 .env-item .env-value{color:#6ee7b7}
 .env-item .env-remove{cursor:pointer;color:#ef4444;font-weight:bold;padding:0 4px}
 </style>
+
+<script>
+// ==================== TABS ====================
+function showTab(tab) {
+  document.querySelectorAll('.tab-panel').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('[id^="tab-"]').forEach(el => el.style.borderBottom = 'none');
+  
+  document.getElementById(`panel-${tab}`).style.display = 'block';
+  document.getElementById(`tab-${tab}`).style.borderBottom = '2px solid var(--primary)';
+}
+
+// ==================== ENVIRONMENT VARIABLES ====================
+let envVars = {};
+
+function loadEnvVars() {
+  const projectId = '{{project.id}}';
+  fetch(`/project/${projectId}/env-vars`)
+    .then(r => r.json())
+    .then(data => { envVars = data.env_vars || {}; renderEnvList(); })
+    .catch(() => {});
+}
+
+function addEnvVar(e) {
+  e.preventDefault();
+  const key = document.getElementById('env-key').value.trim();
+  const value = document.getElementById('env-value').value.trim();
+  if (!key || !value) { alert('Enter both KEY and VALUE'); return false; }
+  envVars[key] = value;
+  renderEnvList();
+  document.getElementById('env-key').value = '';
+  document.getElementById('env-value').value = '';
+  return false;
+}
+
+function removeEnvVar(key) { delete envVars[key]; renderEnvList(); }
+
+function renderEnvList() {
+  const container = document.getElementById('env-list');
+  const keys = Object.keys(envVars);
+  if (keys.length === 0) { container.innerHTML = '<p class="muted">No env vars.</p>'; return; }
+  container.innerHTML = keys.map(key => `
+    <div class="env-item">
+      <span><span class="env-key">${key}</span> = <span class="env-value">${envVars[key]}</span></span>
+      <span class="env-remove" onclick="removeEnvVar('${key}')">✕</span>
+    </div>
+  `).join('');
+}
+
+function saveEnvVars() {
+  const projectId = '{{project.id}}';
+  fetch(`/project/${projectId}/save-env-vars`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ env_vars: envVars })
+  })
+  .then(r => r.json())
+  .then(data => { if (data.success) alert('✅ Environment variables saved!'); else alert('❌ Failed to save'); });
+}
+
+// ==================== LOGS ====================
+async function refreshLogs() {
+  const projectId = '{{project.id}}';
+  const container = document.getElementById('logs-container');
+  try {
+    const r = await fetch(`/project/${projectId}/logs?limit=500`);
+    const j = await r.json();
+    if (j.success) {
+      container.textContent = j.logs.length ? j.logs.join('\n') : 'No logs yet.';
+      container.scrollTop = container.scrollHeight;
+    }
+  } catch(e) {
+    container.textContent = 'Error loading logs: ' + e.message;
+  }
+}
+
+// ==================== RESOURCES ====================
+async function refreshResources() {
+  const projectId = '{{project.id}}';
+  try {
+    const r = await fetch(`/project/${projectId}/resources`);
+    const data = await r.json();
+    if (data.success) {
+      document.getElementById('cpu-display').textContent = data.cpu + '%';
+      document.getElementById('ram-display').textContent = data.ram_mb + ' MB';
+    }
+  } catch(e) {}
+}
+
+// ==================== REFRESH ALL ====================
+function refreshAll() {
+  refreshLogs();
+  refreshResources();
+  loadEnvVars();
+}
+
+// ==================== AUTO REFRESH ====================
+setInterval(refreshResources, 5000);
+setInterval(refreshLogs, 3000);
+
+// ==================== INIT ====================
+document.addEventListener('DOMContentLoaded', function() {
+  loadEnvVars();
+  refreshLogs();
+  setTimeout(refreshResources, 1000);
+});
+</script>
 {% endblock %}
