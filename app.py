@@ -5,9 +5,8 @@ import hashlib
 import re
 import zipfile
 import tarfile
-import psutil
 import socket
-import ssl
+import psutil  # Added properly
 from collections import deque
 from pathlib import Path
 from functools import wraps
@@ -21,8 +20,17 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import ipaddress
 import hmac
-import random
-import string
+
+# Optional SSL (if installed)
+try:
+    import OpenSSL
+    from OpenSSL import crypto
+    OPENSSL_AVAILABLE = True
+except ImportError:
+    OpenSSL = None
+    crypto = None
+    OPENSSL_AVAILABLE = False
+    print("⚠️ pyOpenSSL not installed - SSL certificate generation disabled")
 
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR / "data"
@@ -36,46 +44,6 @@ FILES_ROOT.mkdir(exist_ok=True)
 # Owner credentials
 OWNER_USER = "DarkLord813"
 OWNER_PASS = "DarkLord813"
-
-# ==================== DEFAULT PRICING ====================
-DEFAULT_PRICING = {
-    "currency": "NGN",
-    "contact": "Telegram: @rexoronsaye",
-    "plans": [
-        {
-            "name": "Basic",
-            "duration": "Monthly",
-            "price": "2500",
-            "features": "1 project, 1GB RAM, 5GB storage, Basic support, Port 5000-5005"
-        },
-        {
-            "name": "Pro",
-            "duration": "Yearly",
-            "price": "15000",
-            "features": "5 projects, 2GB RAM, 20GB storage, Priority support, Port 5000-5010, Custom domains"
-        },
-        {
-            "name": "Premium",
-            "duration": "Yearly",
-            "price": "25000",
-            "features": "20 projects, 4GB RAM, 50GB storage, Dedicated help, Port 5000-5020, Custom domains, SSL, Docker, Background workers, Database"
-        },
-    ],
-    "currency_pricing": {
-        "NGN": {"Basic": "2500", "Pro": "15000", "Premium": "25000"},
-        "USD": {"Basic": "3.00", "Pro": "18.00", "Premium": "30.00"},
-        "EUR": {"Basic": "2.80", "Pro": "16.50", "Premium": "28.00"},
-        "GBP": {"Basic": "2.40", "Pro": "14.50", "Premium": "24.00"},
-    }
-}
-
-# Create default files
-if not USERS_FILE.exists():
-    USERS_FILE.write_text("{}")
-if not PRICING_FILE.exists():
-    PRICING_FILE.write_text(json.dumps(DEFAULT_PRICING, indent=2))
-if not PROJECTS_FILE.exists():
-    PROJECTS_FILE.write_text("{}")
 
 # Flutterwave Configuration
 FLW_PUBLIC_KEY = os.environ.get("FLW_PUBLIC_KEY", "")
@@ -95,212 +63,48 @@ SUPPORTED_CURRENCIES = {
     "GBP": {"symbol": "£", "name": "British Pound", "country": "United Kingdom", "flag": "🇬🇧"},
 }
 
+DEFAULT_PRICING = {
+    "currency": "NGN",
+    "contact": "Telegram: @rexoronsaye",
+    "plans": [
+        {
+            "name": "Basic",
+            "duration": "Monthly",
+            "price": "2500",
+            "features": "1 project, 1GB RAM, 5GB storage, Basic support"
+        },
+        {
+            "name": "Pro",
+            "duration": "Yearly",
+            "price": "15000",
+            "features": "5 projects, 2GB RAM, 20GB storage, Priority support, Custom domains"
+        },
+        {
+            "name": "Premium",
+            "duration": "Yearly",
+            "price": "25000",
+            "features": "20 projects, 4GB RAM, 50GB storage, Dedicated help, SSL, Docker, Database"
+        },
+    ],
+    "currency_pricing": {
+        "NGN": {"Basic": "2500", "Pro": "15000", "Premium": "25000"},
+        "USD": {"Basic": "3.00", "Pro": "18.00", "Premium": "30.00"},
+        "EUR": {"Basic": "2.80", "Pro": "16.50", "Premium": "28.00"},
+        "GBP": {"Basic": "2.40", "Pro": "14.50", "Premium": "24.00"},
+    }
+}
+
+# Create default files
+if not USERS_FILE.exists():
+    USERS_FILE.write_text("{}")
+if not PRICING_FILE.exists():
+    PRICING_FILE.write_text(json.dumps(DEFAULT_PRICING, indent=2))
+if not PROJECTS_FILE.exists():
+    PROJECTS_FILE.write_text("{}")
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
-app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500MB for zip uploads
-
-# ==================== DATABASE CREATION ====================
-def create_project_database(username, project_id):
-    """Create a SQLite database for the project"""
-    project_dir = FILES_ROOT / username / project_id
-    db_path = project_dir / "data.db"
-    
-    if not db_path.exists():
-        conn = sqlite3.connect(str(db_path))
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS app_data (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key TEXT UNIQUE,
-                value TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                level TEXT,
-                message TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        conn.commit()
-        conn.close()
-        return True
-    return False
-
-# ==================== ZIP/UPLOAD EXTRACT ====================
-def extract_zip(file_path, extract_to):
-    """Extract zip file to destination"""
-    try:
-        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_to)
-        return True, "Extracted successfully"
-    except zipfile.BadZipFile:
-        return False, "Invalid ZIP file"
-    except Exception as e:
-        return False, f"Extraction error: {str(e)}"
-
-def extract_tar(file_path, extract_to):
-    """Extract tar/tar.gz file to destination"""
-    try:
-        if file_path.endswith('.tar.gz') or file_path.endswith('.tgz'):
-            with tarfile.open(file_path, 'r:gz') as tar_ref:
-                tar_ref.extractall(extract_to)
-        else:
-            with tarfile.open(file_path, 'r') as tar_ref:
-                tar_ref.extractall(extract_to)
-        return True, "Extracted successfully"
-    except Exception as e:
-        return False, f"Extraction error: {str(e)}"
-
-# ==================== PORT MANAGEMENT ====================
-class PortManager:
-    def __init__(self):
-        self.used_ports = {}
-        self.port_range_start = 5000
-        self.port_range_end = 5020
-        self._lock = threading.Lock()
-    
-    def get_available_port(self, username, project_id):
-        """Get an available port for the project"""
-        with self._lock:
-            # Check if project already has a port
-            key = f"{username}:{project_id}"
-            if key in self.used_ports:
-                return self.used_ports[key]
-            
-            # Find available port
-            for port in range(self.port_range_start, self.port_range_end):
-                if self.is_port_available(port):
-                    self.used_ports[key] = port
-                    return port
-            
-            return None
-    
-    def is_port_available(self, port):
-        """Check if port is available"""
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(('0.0.0.0', port))
-            sock.close()
-            return True
-        except:
-            return False
-    
-    def release_port(self, username, project_id):
-        """Release a port"""
-        key = f"{username}:{project_id}"
-        if key in self.used_ports:
-            del self.used_ports[key]
-            return True
-        return False
-
-port_manager = PortManager()
-
-# ==================== SSL SUPPORT ====================
-def generate_ssl_cert(domain, cert_dir):
-    """Generate self-signed SSL certificate"""
-    try:
-        import OpenSSL
-        from OpenSSL import crypto
-        
-        cert_path = cert_dir / f"{domain}.crt"
-        key_path = cert_dir / f"{domain}.key"
-        
-        if cert_path.exists() and key_path.exists():
-            return True
-        
-        # Generate key
-        k = crypto.PKey()
-        k.generate_key(crypto.TYPE_RSA, 2048)
-        
-        # Generate certificate
-        cert = crypto.X509()
-        cert.get_subject().CN = domain
-        cert.set_serial_number(1000)
-        cert.gmtime_adj_notBefore(0)
-        cert.gmtime_adj_notAfter(365*24*60*60)
-        cert.set_issuer(cert.get_subject())
-        cert.set_pubkey(k)
-        cert.sign(k, 'sha256')
-        
-        with open(cert_path, "wb") as f:
-            f.write(crypto.dump_certificate(crypto.FILETYPE_PEM, cert))
-        with open(key_path, "wb") as f:
-            f.write(crypto.dump_privatekey(crypto.FILETYPE_PEM, k))
-        
-        return True
-    except ImportError:
-        print("⚠️ pyOpenSSL not installed - SSL certificates disabled")
-        return False
-    except Exception as e:
-        print(f"❌ SSL generation error: {e}")
-        return False
-
-# ==================== BACKGROUND WORKERS ====================
-class BackgroundWorker:
-    def __init__(self, username, project_id, command, env_vars=None):
-        self.username = username
-        self.project_id = project_id
-        self.command = command
-        self.env_vars = env_vars or {}
-        self.process = None
-        self.is_running = False
-        self._lock = threading.Lock()
-    
-    def start(self):
-        with self._lock:
-            if self.is_running:
-                return False, "Worker already running"
-            
-            project_dir = FILES_ROOT / self.username / self.project_id
-            try:
-                env = os.environ.copy()
-                for key, value in self.env_vars.items():
-                    env[key] = value
-                
-                self.process = subprocess.Popen(
-                    self.command.split(),
-                    cwd=str(project_dir),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    bufsize=1,
-                    env=env
-                )
-                self.is_running = True
-                return True, "Worker started"
-            except Exception as e:
-                return False, f"Error: {str(e)}"
-    
-    def stop(self):
-        with self._lock:
-            if not self.is_running or not self.process:
-                return False, "Worker not running"
-            
-            try:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-                self.is_running = False
-                return True, "Worker stopped"
-            except Exception as e:
-                return False, f"Error: {str(e)}"
-    
-    def get_status(self):
-        if self.process and self.process.poll() is None:
-            return "running"
-        return "stopped"
-
-# Store workers
-WORKERS = {}
-
-# ==================== SECURITY SYSTEM ====================
-# ... (RateLimiter, BruteForceProtector, etc. from previous code)
-
-# ==================== PROJECT ROUTES ====================
+app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500MB
 
 # ==================== GITHUB BACKUP SYSTEM ====================
 class GitHubBackupSystem:
@@ -500,6 +304,43 @@ def get_backup_status():
         return github_backup.get_status()
     return {"enabled": False}
 
+# ==================== PORT MANAGEMENT ====================
+class PortManager:
+    def __init__(self):
+        self.used_ports = {}
+        self.port_range_start = 5000
+        self.port_range_end = 5020
+        self._lock = threading.Lock()
+    
+    def get_available_port(self, username, project_id):
+        with self._lock:
+            key = f"{username}:{project_id}"
+            if key in self.used_ports:
+                return self.used_ports[key]
+            for port in range(self.port_range_start, self.port_range_end):
+                if self.is_port_available(port):
+                    self.used_ports[key] = port
+                    return port
+            return None
+    
+    def is_port_available(self, port):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(('0.0.0.0', port))
+            sock.close()
+            return True
+        except:
+            return False
+    
+    def release_port(self, username, project_id):
+        key = f"{username}:{project_id}"
+        if key in self.used_ports:
+            del self.used_ports[key]
+            return True
+        return False
+
+port_manager = PortManager()
+
 # ==================== STORAGE ====================
 _lock = threading.Lock()
 
@@ -599,7 +440,6 @@ def create_project(username, project_name, description=""):
         projects[username] = {}
     project_id = secrets.token_hex(8)
     
-    # Get available port
     port = port_manager.get_available_port(username, project_id)
     
     projects[username][project_id] = {
@@ -628,12 +468,8 @@ def create_project(username, project_name, description=""):
     }
     save_projects(projects)
     
-    # Create project directory
     project_dir = FILES_ROOT / username / project_id
     project_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create database if needed
-    create_project_database(username, project_id)
     
     return project_id
 
@@ -641,7 +477,6 @@ def delete_project(username, project_id):
     projects = load_projects()
     if username in projects and project_id in projects[username]:
         stop_project_process(username, project_id)
-        stop_project_worker(username, project_id)
         port_manager.release_port(username, project_id)
         project_dir = FILES_ROOT / username / project_id
         if project_dir.exists():
@@ -668,7 +503,6 @@ def start_project_process(username, project_id):
         for key, value in project.get("env_vars", {}).items():
             env[key] = value
         
-        # Add port to environment
         if project.get("port"):
             env["PORT"] = str(project["port"])
         
@@ -694,7 +528,6 @@ def start_project_process(username, project_id):
             projects[username][project_id]["pid"] = proc.pid
             save_projects(projects)
         
-        # Start log reader
         t = threading.Thread(target=_read_project_logs, args=(username, project_id, proc), daemon=True)
         t.start()
         PROJECT_PROCS[project_key]["thread"] = t
@@ -738,11 +571,9 @@ def _read_project_logs(username, project_id, proc):
     except Exception as e:
         buf.append(f"[error] {e}")
     finally:
-        # Check if process crashed
         exit_code = proc.poll()
         if exit_code is not None and exit_code != 0:
             buf.append(f"[crash] Process exited with code {exit_code}")
-            # Auto-restart if enabled
             projects = load_projects()
             if username in projects and project_id in projects[username]:
                 if projects[username][project_id].get("restart_on_crash", False):
@@ -751,12 +582,12 @@ def _read_project_logs(username, project_id, proc):
                     projects[username][project_id]["last_crash_time"] = time.time()
                     save_projects(projects)
                     
-                    if crash_count < 5:  # Max 5 restarts
+                    if crash_count < 5:
                         print(f"🔄 Auto-restarting project {project_id} (crash #{crash_count})")
                         time.sleep(2)
                         start_project_process(username, project_id)
                     else:
-                        print(f"❌ Project {project_id} crashed too many times - stopping auto-restart")
+                        print(f"❌ Project {project_id} crashed too many times")
         else:
             buf.append(f"[exit] process ended with code {exit_code}")
         
@@ -779,16 +610,14 @@ def is_project_running(username, project_id):
     return False
 
 def get_project_resources(username, project_id):
-    """Get CPU and RAM usage for project"""
     project_key = f"{username}:{project_id}"
     if project_key not in PROJECT_PROCS:
         return {"cpu": 0, "ram": 0, "ram_mb": 0}
     
     proc = PROJECT_PROCS[project_key]["proc"]
     try:
-        import psutil
         p = psutil.Process(proc.pid)
-        cpu = p.cpu_percent(interval=0.5)
+        cpu = p.cpu_percent(interval=0.1)
         memory = p.memory_info()
         return {
             "cpu": round(cpu, 1),
@@ -797,42 +626,6 @@ def get_project_resources(username, project_id):
         }
     except:
         return {"cpu": 0, "ram": 0, "ram_mb": 0}
-
-# ==================== WORKER MANAGEMENT ====================
-def start_project_worker(username, project_id):
-    project = get_project(username, project_id)
-    if not project:
-        return False, "Project not found"
-    
-    worker_cmd = project.get("worker_command", "")
-    if not worker_cmd:
-        return False, "No worker command set"
-    
-    worker_key = f"{username}:{project_id}"
-    if worker_key in WORKERS:
-        WORKERS[worker_key].stop()
-    
-    worker = BackgroundWorker(username, project_id, worker_cmd, project.get("env_vars", {}))
-    success, msg = worker.start()
-    if success:
-        WORKERS[worker_key] = worker
-        projects = load_projects()
-        if username in projects and project_id in projects[username]:
-            projects[username][project_id]["worker_running"] = True
-            save_projects(projects)
-    return success, msg
-
-def stop_project_worker(username, project_id):
-    worker_key = f"{username}:{project_id}"
-    if worker_key in WORKERS:
-        WORKERS[worker_key].stop()
-        del WORKERS[worker_key]
-        projects = load_projects()
-        if username in projects and project_id in projects[username]:
-            projects[username][project_id]["worker_running"] = False
-            save_projects(projects)
-        return True
-    return False
 
 # ==================== ROUTES ====================
 
@@ -996,7 +789,7 @@ def project_create():
         return redirect(url_for("projects_list"))
     
     project_id = create_project(u, name, description)
-    flash(f"Project '{name}' created! Port: {get_project(u, project_id).get('port', 'N/A')}", "success")
+    flash(f"Project '{name}' created!", "success")
     return redirect(url_for("project_detail", project_id=project_id))
 
 @app.route("/project/<project_id>")
@@ -1038,7 +831,6 @@ def project_upload(project_id):
     
     project_dir = FILES_ROOT / u / project_id
     files = request.files.getlist("files")
-    extracted = False
     
     for file in files:
         if not file or not file.filename:
@@ -1053,17 +845,21 @@ def project_upload(project_id):
             file.save(file_path)
             
             # Extract
-            if name.endswith('.zip'):
-                success, msg = extract_zip(file_path, project_dir)
-            else:
-                success, msg = extract_tar(file_path, project_dir)
-            
-            if success:
-                extracted = True
-                os.remove(file_path)  # Remove archive after extraction
-                flash(f"📦 Extracted {name} successfully!", "success")
-            else:
-                flash(f"❌ Failed to extract {name}: {msg}", "error")
+            try:
+                if name.endswith('.zip'):
+                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                        zip_ref.extractall(project_dir)
+                else:
+                    if name.endswith('.tar.gz') or name.endswith('.tgz'):
+                        with tarfile.open(file_path, 'r:gz') as tar_ref:
+                            tar_ref.extractall(project_dir)
+                    else:
+                        with tarfile.open(file_path, 'r') as tar_ref:
+                            tar_ref.extractall(project_dir)
+                os.remove(file_path)
+                flash(f"📦 Extracted {name}!", "success")
+            except Exception as e:
+                flash(f"❌ Failed to extract {name}: {str(e)}", "error")
         else:
             file.save(project_dir / name)
             flash(f"📄 Uploaded {name}", "success")
@@ -1122,23 +918,36 @@ def project_save_run_command(project_id):
         flash("Run command saved!", "success")
     return redirect(url_for("project_detail", project_id=project_id))
 
-@app.route("/project/<project_id>/save-worker-command", methods=["POST"])
+@app.route("/project/<project_id>/start", methods=["POST"])
 @require_user
-def project_save_worker_command(project_id):
+def project_start(project_id):
     u = current_user()
     project = get_project(u, project_id)
     if not project:
-        flash("Project not found!", "error")
-        return redirect(url_for("projects_list"))
+        return jsonify({"success": False, "error": "Project not found"}), 404
     
-    worker_command = request.form.get("worker_command", "").strip()
-    projects = load_projects()
-    if u in projects and project_id in projects[u]:
-        projects[u][project_id]["worker_command"] = worker_command
-        projects[u][project_id]["updated_at"] = time.time()
-        save_projects(projects)
-        flash("Worker command saved!", "success")
-    return redirect(url_for("project_detail", project_id=project_id))
+    if is_project_running(u, project_id):
+        return jsonify({"success": False, "error": "Project is already running"}), 400
+    
+    success, msg = start_project_process(u, project_id)
+    if success:
+        threading.Thread(target=lambda: manual_backup(f"Project started: {project['name']}"), daemon=True).start()
+        return jsonify({"success": True, "message": msg, "port": project.get("port")})
+    return jsonify({"success": False, "error": msg}), 400
+
+@app.route("/project/<project_id>/stop", methods=["POST"])
+@require_user
+def project_stop(project_id):
+    u = current_user()
+    project = get_project(u, project_id)
+    if not project:
+        return jsonify({"success": False, "error": "Project not found"}), 404
+    
+    if not is_project_running(u, project_id):
+        return jsonify({"success": True, "message": "Project is already stopped"})
+    
+    stop_project_process(u, project_id)
+    return jsonify({"success": True, "message": "Project stopped"})
 
 @app.route("/project/<project_id>/toggle-restart", methods=["POST"])
 @require_user
@@ -1184,6 +993,10 @@ def project_enable_ssl(project_id):
         flash("Project not found!", "error")
         return redirect(url_for("projects_list"))
     
+    if not OPENSSL_AVAILABLE:
+        flash("❌ SSL not available - pyOpenSSL not installed", "error")
+        return redirect(url_for("project_detail", project_id=project_id))
+    
     domain = project.get("custom_domain", "")
     if not domain:
         flash("Please set a custom domain first!", "error")
@@ -1192,81 +1005,33 @@ def project_enable_ssl(project_id):
     cert_dir = FILES_ROOT / u / project_id / "ssl"
     cert_dir.mkdir(parents=True, exist_ok=True)
     
-    if generate_ssl_cert(domain, cert_dir):
+    try:
+        # Generate SSL certificate
+        k = crypto.PKey()
+        k.generate_key(crypto.TYPE_RSA, 2048)
+        
+        cert = crypto.X509()
+        cert.get_subject().CN = domain
+        cert.set_serial_number(1000)
+        cert.gmtime_adj_notBefore(0)
+        cert.gmtime_adj_notAfter(365*24*60*60)
+        cert.set_issuer(cert.get_subject())
+        cert.set_pubkey(k)
+        cert.sign(k, 'sha256')
+        
+        with open(cert_dir / f"{domain}.crt", "wb") as f:
+            f.write(crypto.dump_certificate(crypto.FILETYPE_PEM, cert))
+        with open(cert_dir / f"{domain}.key", "wb") as f:
+            f.write(crypto.dump_privatekey(crypto.FILETYPE_PEM, k))
+        
         projects = load_projects()
         if u in projects and project_id in projects[u]:
             projects[u][project_id]["has_ssl"] = True
             save_projects(projects)
         flash(f"✅ SSL certificate generated for {domain}", "success")
-    else:
-        flash("❌ Failed to generate SSL certificate", "error")
+    except Exception as e:
+        flash(f"❌ Failed to generate SSL: {str(e)}", "error")
     return redirect(url_for("project_detail", project_id=project_id))
-
-@app.route("/project/<project_id>/create-database", methods=["POST"])
-@require_user
-def project_create_database(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        flash("Project not found!", "error")
-        return redirect(url_for("projects_list"))
-    
-    db_type = request.form.get("db_type", "sqlite")
-    if create_project_database(u, project_id):
-        projects = load_projects()
-        if u in projects and project_id in projects[u]:
-            projects[u][project_id]["has_database"] = True
-            projects[u][project_id]["database_type"] = db_type
-            save_projects(projects)
-        flash(f"✅ {db_type.upper()} database created!", "success")
-    else:
-        flash("✅ Database already exists!", "info")
-    return redirect(url_for("project_detail", project_id=project_id))
-
-@app.route("/project/<project_id>/start", methods=["POST"])
-@require_user
-def project_start(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    
-    if is_project_running(u, project_id):
-        return jsonify({"success": False, "error": "Project is already running"}), 400
-    
-    success, msg = start_project_process(u, project_id)
-    if success:
-        threading.Thread(target=lambda: manual_backup(f"Project started: {project['name']}"), daemon=True).start()
-        return jsonify({"success": True, "message": msg, "port": project.get("port")})
-    return jsonify({"success": False, "error": msg}), 400
-
-@app.route("/project/<project_id>/stop", methods=["POST"])
-@require_user
-def project_stop(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    
-    if not is_project_running(u, project_id):
-        return jsonify({"success": True, "message": "Project is already stopped"})
-    
-    stop_project_process(u, project_id)
-    return jsonify({"success": True, "message": "Project stopped"})
-
-@app.route("/project/<project_id>/worker/start", methods=["POST"])
-@require_user
-def project_worker_start(project_id):
-    u = current_user()
-    success, msg = start_project_worker(u, project_id)
-    return jsonify({"success": success, "message": msg})
-
-@app.route("/project/<project_id>/worker/stop", methods=["POST"])
-@require_user
-def project_worker_stop(project_id):
-    u = current_user()
-    success = stop_project_worker(u, project_id)
-    return jsonify({"success": success, "message": "Worker stopped" if success else "Worker not running"})
 
 @app.route("/project/<project_id>/logs")
 @require_user
@@ -1295,7 +1060,7 @@ def project_logs_download(project_id):
         return redirect(url_for("projects_list"))
     
     logs = get_project_logs(u, project_id, 5000)
-    log_text = "\n".join(logs)
+    log_text = "\n".join(logs) if logs else "No logs available."
     
     response = Response(log_text, mimetype="text/plain")
     response.headers["Content-Disposition"] = f"attachment; filename={project['name']}_logs_{datetime.now().strftime('%Y%m%d')}.txt"
@@ -1451,6 +1216,19 @@ def owner_unban_all():
     flash("All users unbanned!", "success")
     return redirect(url_for("owner_dashboard"))
 
+@app.route("/owner/ban-all", methods=["POST"])
+@require_owner
+def owner_ban_all():
+    users = load_users()
+    count = 0
+    for username in users:
+        if username != OWNER_USER:
+            users[username]["banned"] = True
+            count += 1
+    save_users(users)
+    flash(f"{count} users banned!", "success")
+    return redirect(url_for("owner_dashboard"))
+
 @app.route("/owner/pricing", methods=["POST"])
 @require_owner
 def owner_pricing():
@@ -1509,7 +1287,7 @@ def admin_block_ip():
     ip = request.form.get("ip", "").strip()
     reason = request.form.get("reason", "Manual block")
     # Add IP blocking logic here
-    flash(f"IP {ip} blocked", "success")
+    flash(f"IP {ip} blocked: {reason}", "success")
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/admin/unblock-all-ips", methods=["POST"])
