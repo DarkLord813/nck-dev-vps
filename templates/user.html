@@ -8,15 +8,19 @@
       <div>
         <h1 style="font-size:22px;margin:0">{{username}}'s VPS</h1>
         <p class="muted" style="margin:0">
-          {% if running %}<span class="badge badge-on">● RUNNING</span> {{running_file}}{% else %}<span class="badge badge-off">○ STOPPED</span>{% endif %}
-          <span class="badge badge-subscription" style="margin-left:8px">📊 {{subscription or 'Basic'}}</span>
+          <span class="badge badge-subscription">📊 {{subscription or 'Basic'}}</span>
           {% if is_paid %}<span class="badge badge-on" style="margin-left:4px">✅ PAID</span>{% else %}<span class="badge badge-off" style="margin-left:4px">⚠️ PENDING</span>{% endif %}
+          {% if project_id %}
+          <span class="badge badge-on" style="margin-left:4px">📁 Project: {{project_name}}</span>
+          {% endif %}
         </p>
       </div>
     </div>
-    <div class="card" style="padding:10px 16px;margin:0">
-      <span class="muted" style="font-size:12px">Your Plan</span>
-      <div style="font-weight:700;color:#a5b4fc">{{subscription or 'Basic'}}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      {% if project_id %}
+      <a href="/project/{{project_id}}" class="btn btn-primary btn-sm">📂 Open Project</a>
+      {% endif %}
+      <a href="/projects" class="btn btn-ghost btn-sm">📁 All Projects</a>
     </div>
   </div>
 
@@ -39,123 +43,114 @@
   </div>
   {% endif %}
 
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
-    <div>
-      <!-- Upload Files Card -->
-      <div class="card">
-        <h2>📤 Upload Files</h2>
-        <form method="post" action="/upload" enctype="multipart/form-data" class="row">
-          <input type="file" name="files" multiple required style="flex:1" {% if not is_paid %}disabled{% endif %}>
-          <button class="btn btn-primary" {% if not is_paid %}disabled{% endif %}>Upload</button>
-        </form>
-        <p class="muted" style="margin:8px 0 0">.py · .js · .sh · .txt · .json · .zip · .tar.gz (max 200MB)</p>
-        <p class="muted" style="margin:4px 0 0">📦 ZIP/TAR files auto-extract!</p>
-        {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to upload files</p>{% endif %}
+  <!-- If user has no project -->
+  {% if not project_id %}
+  <div class="card" style="text-align:center;padding:40px;border:2px dashed var(--border)">
+    <div style="font-size:48px">📁</div>
+    <h2>No Project Yet</h2>
+    <p class="muted">Create your first project to start deploying!</p>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:10px">
+      <a href="/projects" class="btn btn-primary">📁 Go to Projects</a>
+      <a href="/project/create" class="btn btn-ok">➕ Create Project</a>
+    </div>
+  </div>
+  {% else %}
+  
+  <!-- Project Info -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="margin:0">📁 {{project_name}}</h2>
+        <p class="muted">{{project_description or 'No description'}}</p>
       </div>
-
-      <!-- Requirements.txt Upload Card -->
-      <div class="card">
-        <h2>📦 Upload Requirements.txt</h2>
-        <form method="post" action="/upload-requirements" enctype="multipart/form-data" class="row">
-          <input type="file" name="requirements" accept=".txt" required style="flex:1" {% if not is_paid %}disabled{% endif %}>
-          <button class="btn btn-warn" {% if not is_paid %}disabled{% endif %}>📦 Upload Requirements</button>
-        </form>
-        <p class="muted" style="margin:8px 0 0">Upload a <code>requirements.txt</code> file to install Python dependencies</p>
-        <div id="requirements-status" style="margin-top:8px;font-size:13px;"></div>
-        {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to upload requirements</p>{% endif %}
-      </div>
-
-      <!-- Environment Variables Card -->
-      <div class="card">
-        <h2>🔑 Environment Variables</h2>
-        <form id="env-form" onsubmit="return addEnvironmentVariable(event)">
-          <div class="row" style="margin-bottom:8px">
-            <input id="env-key" placeholder="KEY_NAME" style="flex:1;min-width:100px" {% if not is_paid %}disabled{% endif %}>
-            <input id="env-value" placeholder="value" style="flex:1;min-width:100px" {% if not is_paid %}disabled{% endif %}>
-            <button class="btn btn-primary btn-sm" type="submit" {% if not is_paid %}disabled{% endif %}>➕ Add</button>
-          </div>
-        </form>
-        <div id="env-list" style="margin-top:8px;max-height:150px;overflow-y:auto;font-size:13px;">
-          <p class="muted">No environment variables set yet.</p>
-        </div>
-        <button class="btn btn-ok btn-sm" onclick="saveEnvironmentVariables()" style="margin-top:8px" {% if not is_paid %}disabled{% endif %}>💾 Save Env Variables</button>
-        <button class="btn btn-danger btn-sm" onclick="clearEnvironmentVariables()" style="margin-top:8px;margin-left:4px" {% if not is_paid %}disabled{% endif %}>🗑️ Clear All</button>
-        {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to use environment variables</p>{% endif %}
-      </div>
-
-      <!-- Deploy Button -->
-      <div class="card">
-        <h2>🚀 Deploy Project</h2>
-        <button class="btn btn-primary" onclick="deployProject()" style="width:100%;justify-content:center" {% if not is_paid %}disabled{% endif %}>
-          🚀 Deploy Now
-        </button>
-        <p class="muted" style="margin:8px 0 0">Deploys the main Python file with all requirements and environment variables</p>
-        {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to deploy</p>{% endif %}
-      </div>
-
-      <!-- Files List -->
-      <div class="card">
-        <h2>📁 Files ({{files|length}})</h2>
-        <ul style="list-style:none;padding:0;margin:0;max-height:260px;overflow:auto">
-          {% for f in files %}
-          <li style="display:flex;justify-content:space-between;align-items:center;padding:9px 10px;border-bottom:1px solid var(--border);font-size:13px">
-            <span>📄 {{f}}</span>
-            <span class="row" style="gap:6px">
-              <a href="/file/view/{{f}}" target="_blank"><button class="btn btn-ghost btn-sm" type="button">View</button></a>
-              {% if f.endswith('.py') or f.endswith('.js') or f.endswith('.mjs') or f.endswith('.sh') %}
-              <button class="btn btn-ok btn-sm" onclick="startFile('{{f}}')" {% if not is_paid %}disabled{% endif %}>▶ Start</button>
-              {% endif %}
-              <form class="inline" method="post" action="/file/delete/{{f}}" onsubmit="return confirm('Delete {{f}}?')">
-                <button class="btn btn-danger btn-sm">×</button>
-              </form>
-            </span>
-          </li>
-          {% else %}
-          <li class="muted" style="padding:14px;text-align:center">No files yet. Upload one above.</li>
-          {% endfor %}
-        </ul>
-      </div>
-
-      <!-- Install Module -->
-      <div class="card">
-        <h2>📦 Install Module</h2>
-        <form class="row" onsubmit="return doInstall(event)">
-          <input id="cmd" placeholder="pip install requests" style="flex:1" required {% if not is_paid %}disabled{% endif %}>
-          <button class="btn btn-primary" {% if not is_paid %}disabled{% endif %}>Install</button>
-        </form>
-        <p class="muted" style="margin:8px 0 8px">Allowed: <code>pip install &lt;mod&gt;</code> or <code>npm install &lt;mod&gt;</code></p>
-        <div id="installLogs" style="background:#04060d;color:#9fd3ff;font-family:'JetBrains Mono',monospace;font-size:12px;padding:12px;border-radius:10px;height:140px;overflow:auto;white-space:pre-wrap;border:1px solid var(--border)"></div>
-        {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to install modules</p>{% endif %}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        {% if project_is_running %}
+        <span class="badge badge-on">🟢 Running</span>
+        {% else %}
+        <span class="badge badge-off">🔴 Stopped</span>
+        {% endif %}
+        {% if project_port %}
+        <span class="badge badge-subscription">🔌 Port: {{project_port}}</span>
+        {% endif %}
+        <a href="/project/{{project_id}}" class="btn btn-primary btn-sm">🔧 Manage Project</a>
       </div>
     </div>
+    
+    <!-- File List -->
+    <div style="margin-top:14px">
+      <h3>📄 Files ({{project_files|length}})</h3>
+      <ul style="list-style:none;padding:0;margin:0;max-height:200px;overflow:auto">
+        {% for f in project_files %}
+        <li style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-bottom:1px solid var(--border);font-size:13px">
+          <span>📄 {{f}}</span>
+          <span class="row" style="gap:6px">
+            <a href="/file/view/{{f}}" target="_blank"><button class="btn btn-ghost btn-sm" type="button">View</button></a>
+            <form class="inline" method="post" action="/file/delete/{{f}}" onsubmit="return confirm('Delete {{f}}?')">
+              <button class="btn btn-danger btn-sm">×</button>
+            </form>
+          </span>
+        </li>
+        {% else %}
+        <li class="muted" style="padding:10px;text-align:center">No files yet.</li>
+        {% endfor %}
+      </ul>
+    </div>
+    
+    <!-- Quick Upload -->
+    <div style="margin-top:14px">
+      <h3>📤 Upload Files</h3>
+      <form method="post" action="/upload" enctype="multipart/form-data" class="row">
+        <input type="file" name="files" multiple required style="flex:1" {% if not is_paid %}disabled{% endif %}>
+        <button class="btn btn-primary" {% if not is_paid %}disabled{% endif %}>Upload</button>
+      </form>
+      <p class="muted" style="margin:4px 0 0">.py · .js · .sh · .txt · .json · .zip · .tar.gz</p>
+    </div>
+  </div>
 
-    <div>
-      <!-- Server Controls -->
-      <div class="card">
-        <h2>⚙️ Server Controls</h2>
-        <div class="row">
-          <button class="btn btn-warn" onclick="restart()" {% if not is_paid %}disabled{% endif %}>🔄 Restart</button>
-          <button class="btn btn-danger" onclick="stop()" {% if not is_paid %}disabled{% endif %}>⏹ Stop</button>
-          <button class="btn btn-ghost" onclick="delServer()" {% if not is_paid %}disabled{% endif %}>🗑 Clear</button>
-        </div>
-        <p class="muted" style="margin-top:10px;font-size:12px">💡 Subscription: <strong>{{subscription or 'Basic'}}</strong> — 
-          {% if subscription == 'Basic' %}Python files only, no pip install{% elif subscription == 'Pro' %}Python/Node/Shell, pip/npm, 2GB RAM{% else %}All features, 4GB RAM, Dedicated help{% endif %}
-        </p>
-        {% if not is_paid %}<p class="muted" style="margin-top:10px;font-size:12px;color:#f59e0b">⚠️ Subscribe to use server controls</p>{% endif %}
-      </div>
-
-      <!-- Real-time Logs -->
-      <div class="card">
-        <h2>📜 Real-time Logs</h2>
-        <div id="logs" style="background:#04060d;color:#a6f3a6;font-family:'JetBrains Mono',monospace;font-size:12px;padding:14px;border-radius:10px;height:420px;overflow:auto;white-space:pre-wrap;border:1px solid var(--border)">Waiting for output...</div>
+  <!-- Quick Actions -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px">
+    <div class="card">
+      <h3>📦 Requirements</h3>
+      <form method="post" action="/upload-requirements" enctype="multipart/form-data" class="row">
+        <input type="file" name="requirements" accept=".txt" required style="flex:1" {% if not is_paid %}disabled{% endif %}>
+        <button class="btn btn-warn btn-sm" {% if not is_paid %}disabled{% endif %}>Upload</button>
+      </form>
+      <div id="requirements-status" style="margin-top:4px;font-size:12px;"></div>
+    </div>
+    
+    <div class="card">
+      <h3>🔑 Env Variables</h3>
+      <form id="env-form" onsubmit="return addEnvironmentVariable(event)" class="row">
+        <input id="env-key" placeholder="KEY" style="flex:1;min-width:60px" {% if not is_paid %}disabled{% endif %}>
+        <input id="env-value" placeholder="value" style="flex:1;min-width:60px" {% if not is_paid %}disabled{% endif %}>
+        <button class="btn btn-primary btn-sm" type="submit" {% if not is_paid %}disabled{% endif %}>+</button>
+      </form>
+      <div id="env-list" style="margin-top:4px;max-height:80px;overflow-y:auto;font-size:12px;"></div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="btn btn-ok btn-sm" onclick="saveEnvironmentVariables()" {% if not is_paid %}disabled{% endif %}>💾 Save</button>
+        <button class="btn btn-danger btn-sm" onclick="clearEnvironmentVariables()" {% if not is_paid %}disabled{% endif %}>🗑️</button>
       </div>
     </div>
+    
+    <div class="card">
+      <h3>🚀 Deploy</h3>
+      <button class="btn btn-primary" onclick="deployProject()" style="width:100%" {% if not is_paid %}disabled{% endif %}>
+        🚀 Deploy Now
+      </button>
+      <p class="muted" style="margin:4px 0 0;font-size:12px">Deploys main Python file</p>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Real-time Logs -->
+  <div class="card">
+    <h2>📜 Real-time Logs</h2>
+    <div id="logs" style="background:#04060d;color:#a6f3a6;font-family:'JetBrains Mono',monospace;font-size:12px;padding:14px;border-radius:10px;height:300px;overflow:auto;white-space:pre-wrap;border:1px solid var(--border)">Waiting for output...</div>
   </div>
 </div>
 
 <style>
-@media(max-width:820px){.wrap>div:last-child{grid-template-columns:1fr!important}}
-.env-item{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:rgba(10,14,32,0.3);border-radius:6px;margin-bottom:4px;border:1px solid var(--border)}
+.env-item{display:flex;justify-content:space-between;align-items:center;padding:2px 6px;background:rgba(10,14,32,0.3);border-radius:4px;margin-bottom:2px;border:1px solid var(--border);font-size:12px}
 .env-item .env-key{color:#a5b4fc;font-weight:600}
 .env-item .env-value{color:#6ee7b7}
 .env-item .env-remove{cursor:pointer;color:#ef4444;font-weight:bold;padding:0 4px}
@@ -165,9 +160,9 @@
 // ==================== ENVIRONMENT VARIABLES ====================
 let envVariables = [];
 
-// Load saved env variables on page load
 document.addEventListener('DOMContentLoaded', function() {
     loadEnvironmentVariables();
+    loadRequirementsStatus();
 });
 
 function loadEnvironmentVariables() {
@@ -177,7 +172,6 @@ function loadEnvironmentVariables() {
             if (data.env_vars) {
                 envVariables = data.env_vars;
                 renderEnvList();
-                updateEnvCount();
             }
         })
         .catch(() => {});
@@ -193,7 +187,6 @@ function addEnvironmentVariable(event) {
         return false;
     }
     
-    // Check for duplicate
     if (envVariables.some(e => e.key === key)) {
         alert(`Environment variable "${key}" already exists.`);
         return false;
@@ -201,7 +194,6 @@ function addEnvironmentVariable(event) {
     
     envVariables.push({ key, value });
     renderEnvList();
-    updateEnvCount();
     document.getElementById('env-key').value = '';
     document.getElementById('env-value').value = '';
     return false;
@@ -210,13 +202,12 @@ function addEnvironmentVariable(event) {
 function removeEnvVariable(index) {
     envVariables.splice(index, 1);
     renderEnvList();
-    updateEnvCount();
 }
 
 function renderEnvList() {
     const container = document.getElementById('env-list');
     if (envVariables.length === 0) {
-        container.innerHTML = '<p class="muted">No environment variables set yet.</p>';
+        container.innerHTML = '<p class="muted">No env vars.</p>';
         return;
     }
     
@@ -226,10 +217,6 @@ function renderEnvList() {
             <span class="env-remove" onclick="removeEnvVariable(${index})">✕</span>
         </div>
     `).join('');
-}
-
-function updateEnvCount() {
-    // Update count badge if needed
 }
 
 function escapeHtml(text) {
@@ -252,9 +239,9 @@ function saveEnvironmentVariables() {
     .then(r => r.json())
     .then(data => {
         if (data.success) {
-            alert('✅ Environment variables saved successfully!');
+            alert('✅ Environment variables saved!');
         } else {
-            alert('❌ Failed to save environment variables: ' + data.error);
+            alert('❌ Failed to save: ' + data.error);
         }
     })
     .catch(() => alert('❌ Error saving environment variables.'));
@@ -263,18 +250,16 @@ function saveEnvironmentVariables() {
 function clearEnvironmentVariables() {
     if (!confirm('Clear all environment variables?')) return;
     
-    fetch('/clear-env-vars', {
-        method: 'POST'
-    })
-    .then(r => r.json())
-    .then(data => {
-        if (data.success) {
-            envVariables = [];
-            renderEnvList();
-            alert('✅ All environment variables cleared.');
-        }
-    })
-    .catch(() => alert('❌ Error clearing environment variables.'));
+    fetch('/clear-env-vars', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                envVariables = [];
+                renderEnvList();
+                alert('✅ All environment variables cleared.');
+            }
+        })
+        .catch(() => alert('❌ Error clearing environment variables.'));
 }
 
 // ==================== DEPLOY PROJECT ====================
@@ -298,57 +283,26 @@ async function deployProject() {
     }
 }
 
-// ==================== REQUIREMENTS UPLOAD ====================
-// Requirements upload status
+// ==================== REQUIREMENTS STATUS ====================
+function loadRequirementsStatus() {
+    const status = document.getElementById('requirements-status');
+    // Check if requirements file exists by looking at file list
+    // This is handled by the form submit event below
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     const reqForm = document.querySelector('form[action="/upload-requirements"]');
     if (reqForm) {
         reqForm.addEventListener('submit', function(e) {
             const status = document.getElementById('requirements-status');
-            status.innerHTML = '⏳ Uploading and installing requirements...';
+            status.innerHTML = '⏳ Uploading...';
             status.style.color = '#fbbf24';
         });
     }
 });
 
-// ==================== EXISTING FUNCTIONS ====================
-async function post(url, body){
-    const r = await fetch(url, {method:'POST', body: body || new FormData()});
-    return r.json();
-}
-
-async function startFile(f){
-    const fd = new FormData(); 
-    fd.append('file', f);
-    const r = await post('/server/start', fd);
-    if (!r.ok) alert(r.msg);
-    setTimeout(() => location.reload(), 600);
-}
-
-async function restart(){ 
-    const r = await post('/server/restart'); 
-    if (!r.ok) alert(r.msg || 'no file running'); 
-}
-
-async function stop(){ 
-    await post('/server/stop'); 
-}
-
-async function delServer(){ 
-    if (confirm('Stop and clear process?')) await post('/server/delete'); 
-}
-
-async function doInstall(e){
-    e.preventDefault();
-    const fd = new FormData(); 
-    fd.append('command', document.getElementById('cmd').value);
-    const r = await post('/install', fd);
-    if (!r.ok) alert(r.msg);
-    return false;
-}
-
 // ==================== LOGS ====================
-const logBox = document.getElementById('logs'), instBox = document.getElementById('installLogs');
+const logBox = document.getElementById('logs');
 async function tick(){
     try{
         const r = await fetch('/logs'); 
@@ -356,8 +310,6 @@ async function tick(){
         const atBottom = logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 30;
         logBox.textContent = j.logs.length ? j.logs.join('\n') : 'Waiting for output...';
         if(atBottom) logBox.scrollTop = logBox.scrollHeight;
-        instBox.textContent = j.install.join('\n');
-        instBox.scrollTop = instBox.scrollHeight;
     } catch(e){}
 }
 setInterval(tick, 1200); 
