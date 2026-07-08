@@ -4,7 +4,7 @@ A lightweight web-based VPS-like panel — deployable on Choreo. The owner creat
 
 ## Owner Credentials
 - Username: `DarkLord813`
-- Password: `DarkLord813_codex`
+- Password: `DarkLord813`
 
 ## Features
 
