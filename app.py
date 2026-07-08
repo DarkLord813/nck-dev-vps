@@ -6,7 +6,7 @@ import re
 import zipfile
 import tarfile
 import socket
-import psutil  # Added properly
+import psutil
 from collections import deque
 from pathlib import Path
 from functools import wraps
@@ -648,11 +648,13 @@ def landing():
 
 @app.route("/pricing")
 def pricing_page():
+    users = load_users()
     return render_template("pricing.html",
         pricing=load_pricing(),
         flw_key=FLW_PUBLIC_KEY,
         flw_enabled=FLW_ENABLED,
-        currencies=SUPPORTED_CURRENCIES
+        currencies=SUPPORTED_CURRENCIES,
+        users=users
     )
 
 @app.route("/register", methods=["GET", "POST"])
@@ -758,6 +760,133 @@ def auto_login(token):
             session["username"] = uname
             return redirect(url_for("user_dashboard"))
     return "Invalid link", 404
+
+# ==================== FLUTTERWAVE PAYMENT ROUTES ====================
+
+@app.route("/initialize-payment", methods=["POST"])
+def initialize_payment():
+    if not FLW_ENABLED:
+        return jsonify({"error": "Flutterwave is not configured."}), 400
+    
+    try:
+        data = request.json
+        username = data.get("username")
+        plan_name = data.get("plan_name")
+        email = data.get("email")
+        currency = data.get("currency", "NGN")
+        
+        # If no email provided, try to get from users
+        if not email:
+            users = load_users()
+            user_data = users.get(username, {})
+            email = user_data.get("email", "")
+            
+            # If still no email, return error
+            if not email:
+                return jsonify({"error": "Email is required for payment. Please update your profile."}), 400
+        
+        if currency not in SUPPORTED_CURRENCIES:
+            return jsonify({"error": f"Currency {currency} is not supported."}), 400
+        
+        pricing = load_pricing()
+        plan = None
+        for p in pricing["plans"]:
+            if p["name"] == plan_name:
+                plan = p
+                break
+        
+        if not plan:
+            return jsonify({"error": "Plan not found"}), 400
+        
+        currency_pricing = pricing.get("currency_pricing", {})
+        if currency in currency_pricing and plan_name in currency_pricing[currency]:
+            amount = currency_pricing[currency][plan_name]
+        else:
+            amount = plan["price"]
+        
+        amount = float(amount)
+        tx_ref = f"VPS-{username}-{secrets.token_hex(8)}"
+        
+        headers = {
+            "Authorization": f"Bearer {FLW_SECRET_KEY}",
+            "Content-Type": "application/json"
+        }
+        if FLW_ENCRYPTION_KEY:
+            headers["Encryption-Key"] = FLW_ENCRYPTION_KEY
+        
+        payload = {
+            "tx_ref": tx_ref,
+            "amount": amount,
+            "currency": currency,
+            "redirect_url": request.host_url + "payment-verify",
+            "payment_options": "card,ussd,banktransfer,mobilemoney",
+            "customer": {"email": email, "name": username},
+            "customizations": {
+                "title": "NCK Dev VPS Subscription",
+                "description": f"{plan_name} Plan - {plan['duration']} ({currency})",
+            },
+            "meta": {"username": username, "plan": plan_name, "currency": currency}
+        }
+        
+        response = requests.post(FLW_INITIALIZE_URL, json=payload, headers=headers)
+        result = response.json()
+        
+        if result["status"] == "success":
+            return jsonify({
+                "status": True,
+                "link": result["data"]["link"],
+                "reference": result["data"]["tx_ref"],
+                "amount": amount,
+                "currency": currency
+            })
+        else:
+            return jsonify({"error": result.get("message", "Payment initialization failed")}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+@app.route("/payment-verify")
+def payment_verify():
+    tx_ref = request.args.get("tx_ref")
+    if not tx_ref:
+        flash("No transaction reference found!", "error")
+        return redirect(url_for("pricing_page"))
+    
+    try:
+        headers = {"Authorization": f"Bearer {FLW_SECRET_KEY}", "Content-Type": "application/json"}
+        if FLW_ENCRYPTION_KEY:
+            headers["Encryption-Key"] = FLW_ENCRYPTION_KEY
+        
+        response = requests.get(f"{FLW_VERIFY_URL}{tx_ref}/verify", headers=headers)
+        result = response.json()
+        
+        if result["status"] == "success" and result["data"]["status"] == "successful":
+            metadata = result["data"]["meta"]
+            username = metadata.get("username")
+            plan = metadata.get("plan")
+            currency = metadata.get("currency", "NGN")
+            
+            users = load_users()
+            if username in users:
+                users[username]["payment_status"] = "paid"
+                users[username]["subscription"] = plan
+                users[username]["payment_reference"] = tx_ref
+                users[username]["payment_amount"] = result["data"]["amount"]
+                users[username]["payment_currency"] = currency
+                save_users(users)
+                flash(f"Payment successful! Your {plan} subscription is now active. 🎉", "success")
+            else:
+                flash("User not found!", "error")
+        else:
+            flash("Payment verification failed. Please contact support.", "error")
+    except Exception as e:
+        flash(f"Error verifying payment: {str(e)}", "error")
+    
+    return redirect(url_for("login"))
+
+@app.route("/payment-cancel")
+def payment_cancel():
+    flash("Payment cancelled. You can try again anytime.", "error")
+    return redirect(url_for("pricing_page"))
 
 # ==================== PROJECT ROUTES ====================
 
@@ -1286,7 +1415,6 @@ def admin_restore():
 def admin_block_ip():
     ip = request.form.get("ip", "").strip()
     reason = request.form.get("reason", "Manual block")
-    # Add IP blocking logic here
     flash(f"IP {ip} blocked: {reason}", "success")
     return redirect(url_for("owner_dashboard"))
 
