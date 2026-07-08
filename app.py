@@ -775,6 +775,9 @@ def initialize_payment():
         email = data.get("email")
         currency = data.get("currency", "NGN")
         
+        # Log the request for debugging
+        print(f"💰 Payment request: username={username}, plan={plan_name}, email={email}, currency={currency}")
+        
         # If no email provided, try to get from users
         if not email:
             users = load_users()
@@ -789,23 +792,26 @@ def initialize_payment():
             return jsonify({"error": f"Currency {currency} is not supported."}), 400
         
         pricing = load_pricing()
+        
+        # Find the plan
         plan = None
         for p in pricing["plans"]:
-            if p["name"] == plan_name:
+            if p["name"].lower() == plan_name.lower():
                 plan = p
                 break
         
         if not plan:
-            return jsonify({"error": "Plan not found"}), 400
+            return jsonify({"error": f"Plan '{plan_name}' not found"}), 400
         
+        # Get price in selected currency
         currency_pricing = pricing.get("currency_pricing", {})
         if currency in currency_pricing and plan_name in currency_pricing[currency]:
-            amount = currency_pricing[currency][plan_name]
+            amount = float(currency_pricing[currency][plan_name])
         else:
-            amount = plan["price"]
+            amount = float(plan["price"])
         
-        amount = float(amount)
-        tx_ref = f"VPS-{username}-{secrets.token_hex(8)}"
+        # Generate transaction reference
+        tx_ref = f"VPS-{username}-{int(time.time())}-{secrets.token_hex(4)}"
         
         headers = {
             "Authorization": f"Bearer {FLW_SECRET_KEY}",
@@ -818,20 +824,28 @@ def initialize_payment():
             "tx_ref": tx_ref,
             "amount": amount,
             "currency": currency,
-            "redirect_url": request.host_url + "payment-verify",
+            "redirect_url": request.host_url.rstrip('/') + "/payment-verify",
             "payment_options": "card,ussd,banktransfer,mobilemoney",
             "customer": {"email": email, "name": username},
             "customizations": {
                 "title": "NCK Dev VPS Subscription",
                 "description": f"{plan_name} Plan - {plan['duration']} ({currency})",
             },
-            "meta": {"username": username, "plan": plan_name, "currency": currency}
+            "meta": {
+                "username": username,
+                "plan": plan_name,
+                "currency": currency
+            }
         }
         
-        response = requests.post(FLW_INITIALIZE_URL, json=payload, headers=headers)
+        print(f"💰 Sending to Flutterwave: {payload}")
+        
+        response = requests.post(FLW_INITIALIZE_URL, json=payload, headers=headers, timeout=30)
         result = response.json()
         
-        if result["status"] == "success":
+        print(f"💰 Flutterwave response: {result}")
+        
+        if result.get("status") == "success":
             return jsonify({
                 "status": True,
                 "link": result["data"]["link"],
@@ -840,8 +854,10 @@ def initialize_payment():
                 "currency": currency
             })
         else:
-            return jsonify({"error": result.get("message", "Payment initialization failed")}), 400
+            error_msg = result.get("message", "Payment initialization failed")
+            return jsonify({"error": error_msg}), 400
     except Exception as e:
+        print(f"❌ Payment error: {e}")
         return jsonify({"error": str(e)}), 400
 
 @app.route("/payment-verify")
@@ -859,8 +875,8 @@ def payment_verify():
         response = requests.get(f"{FLW_VERIFY_URL}{tx_ref}/verify", headers=headers)
         result = response.json()
         
-        if result["status"] == "success" and result["data"]["status"] == "successful":
-            metadata = result["data"]["meta"]
+        if result.get("status") == "success" and result.get("data", {}).get("status") == "successful":
+            metadata = result["data"].get("meta", {})
             username = metadata.get("username")
             plan = metadata.get("plan")
             currency = metadata.get("currency", "NGN")
@@ -870,7 +886,7 @@ def payment_verify():
                 users[username]["payment_status"] = "paid"
                 users[username]["subscription"] = plan
                 users[username]["payment_reference"] = tx_ref
-                users[username]["payment_amount"] = result["data"]["amount"]
+                users[username]["payment_amount"] = result["data"].get("amount")
                 users[username]["payment_currency"] = currency
                 save_users(users)
                 flash(f"Payment successful! Your {plan} subscription is now active. 🎉", "success")
