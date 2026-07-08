@@ -10,29 +10,31 @@
         <p class="muted" style="margin:0">{{total_projects}} projects total</p>
       </div>
     </div>
-    <a href="/dashboard" class="btn btn-ghost">🔙 Back to Dashboard</a>
+    <a href="/dashboard" class="btn btn-ghost">🔙 Back</a>
   </div>
 
   <!-- Create Project -->
   <div class="card">
-    <h2>➕ Create New Project</h2>
+    <h2>➕ Create Project</h2>
     <form method="post" action="/project/create" class="row">
       <input name="name" placeholder="Project Name" required style="flex:1;min-width:150px">
       <input name="description" placeholder="Description (optional)" style="flex:1;min-width:150px">
-      <button class="btn btn-primary">Create Project</button>
+      <button class="btn btn-primary">Create</button>
     </form>
   </div>
 
-  <!-- Projects List -->
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px">
+  <!-- Projects Grid -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px">
     {% for pid, project in projects.items() %}
     <div class="card" style="{% if project.is_running %}border:2px solid rgba(16,185,129,0.5);{% endif %}">
       <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
-        <div>
+        <div style="flex:1">
           <h3 style="margin:0">{{project.name}}</h3>
           <p class="muted" style="font-size:13px;margin:4px 0">
             {{project.description or 'No description'}}
           </p>
+          
+          <!-- Stats Row -->
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
             <span class="badge badge-subscription">📁 {{project.files|length}} files</span>
             {% if project.is_running %}
@@ -40,17 +42,30 @@
             {% else %}
             <span class="badge badge-off">🔴 Stopped</span>
             {% endif %}
+            {% if project.port %}
             <span class="badge" style="background:rgba(99,102,241,0.18);color:#a5b4fc;border:1px solid rgba(99,102,241,0.35)">
-              📅 {{ (project.created_at or 0)|int|string|truncate(20) }}
+              🔌 {{project.port}}
             </span>
+            {% endif %}
+            {% if project.custom_domain %}
+            <span class="badge" style="background:rgba(16,185,129,0.18);color:#6ee7b7;border:1px solid rgba(16,185,129,0.35)">
+              🌐 {{project.custom_domain}}
+            </span>
+            {% endif %}
+          </div>
+          
+          <!-- CPU/RAM Usage -->
+          <div style="display:flex;gap:12px;margin-top:6px;font-size:12px">
+            <span class="muted">💻 CPU: <strong>{{ project.cpu or 0 }}%</strong></span>
+            <span class="muted">🧠 RAM: <strong>{{ project.ram_mb or 0 }}MB</strong></span>
           </div>
         </div>
         <a href="/project/{{pid}}" class="btn btn-primary btn-sm">Open</a>
       </div>
     </div>
     {% else %}
-    <div class="card" style="text-align:center;padding:40px">
-      <p class="muted" style="font-size:16px">No projects yet. Create your first project above!</p>
+    <div class="card" style="text-align:center;padding:40px;grid-column:1/-1">
+      <p class="muted" style="font-size:16px">No projects yet. Create one above!</p>
     </div>
     {% endfor %}
   </div>
