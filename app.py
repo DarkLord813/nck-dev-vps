@@ -336,7 +336,10 @@ class PortManager:
         if key in self.used_ports:
             del self.used_ports[key]
             return True
-        return Falseport_manager = PortManager()
+        return False
+
+# ========== FIXED: PortManager initialization ==========
+port_manager = PortManager()
 
 # ==================== STORAGE ====================
 _lock = threading.Lock()
