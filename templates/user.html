@@ -48,8 +48,8 @@
           <input type="file" name="files" multiple required style="flex:1" {% if not is_paid %}disabled{% endif %}>
           <button class="btn btn-primary" {% if not is_paid %}disabled{% endif %}>Upload</button>
         </form>
-        <p class="muted" style="margin:8px 0 0">.py · .js · .sh · .html · .json · .txt · any (max 200MB)</p>
-        <p class="muted" style="margin:4px 0 0">📦 Include <code>requirements.txt</code> for Python dependencies</p>
+        <p class="muted" style="margin:8px 0 0">.py · .js · .sh · .txt · .json · .zip · .tar.gz (max 200MB)</p>
+        <p class="muted" style="margin:4px 0 0">📦 ZIP/TAR files auto-extract!</p>
         {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to upload files</p>{% endif %}
       </div>
 
@@ -62,6 +62,7 @@
         </form>
         <p class="muted" style="margin:8px 0 0">Upload a <code>requirements.txt</code> file to install Python dependencies</p>
         <div id="requirements-status" style="margin-top:8px;font-size:13px;"></div>
+        {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to upload requirements</p>{% endif %}
       </div>
 
       <!-- Environment Variables Card -->
@@ -69,31 +70,27 @@
         <h2>🔑 Environment Variables</h2>
         <form id="env-form" onsubmit="return addEnvironmentVariable(event)">
           <div class="row" style="margin-bottom:8px">
-            <input id="env-key" placeholder="KEY_NAME" style="flex:1;min-width:100px">
-            <input id="env-value" placeholder="value" style="flex:1;min-width:100px">
-            <button class="btn btn-primary btn-sm" type="submit">➕ Add</button>
+            <input id="env-key" placeholder="KEY_NAME" style="flex:1;min-width:100px" {% if not is_paid %}disabled{% endif %}>
+            <input id="env-value" placeholder="value" style="flex:1;min-width:100px" {% if not is_paid %}disabled{% endif %}>
+            <button class="btn btn-primary btn-sm" type="submit" {% if not is_paid %}disabled{% endif %}>➕ Add</button>
           </div>
         </form>
         <div id="env-list" style="margin-top:8px;max-height:150px;overflow-y:auto;font-size:13px;">
           <p class="muted">No environment variables set yet.</p>
         </div>
-        <button class="btn btn-ok btn-sm" onclick="saveEnvironmentVariables()" style="margin-top:8px">💾 Save Env Variables</button>
-        <button class="btn btn-danger btn-sm" onclick="clearEnvironmentVariables()" style="margin-top:8px;margin-left:4px">🗑️ Clear All</button>
+        <button class="btn btn-ok btn-sm" onclick="saveEnvironmentVariables()" style="margin-top:8px" {% if not is_paid %}disabled{% endif %}>💾 Save Env Variables</button>
+        <button class="btn btn-danger btn-sm" onclick="clearEnvironmentVariables()" style="margin-top:8px;margin-left:4px" {% if not is_paid %}disabled{% endif %}>🗑️ Clear All</button>
+        {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to use environment variables</p>{% endif %}
       </div>
 
-      <!-- GitHub Deploy Card -->
+      <!-- Deploy Button -->
       <div class="card">
-        <h2>🚀 Deploy from GitHub</h2>
-        <form id="github-deploy-form" onsubmit="return deployFromGitHub(event)">
-          <input id="github-repo" placeholder="GitHub Repo (e.g., username/repo)" style="width:100%;margin-bottom:8px" required {% if not is_paid %}disabled{% endif %}>
-          <input id="github-branch" placeholder="Branch (default: main)" style="width:100%;margin-bottom:8px" {% if not is_paid %}disabled{% endif %}>
-          <input id="run-command" placeholder="Run Command (e.g., python app.py)" style="width:100%;margin-bottom:8px" required {% if not is_paid %}disabled{% endif %}>
-          <button class="btn btn-primary" style="width:100%;justify-content:center" {% if not is_paid %}disabled{% endif %}>
-            🚀 Deploy from GitHub
-          </button>
-        </form>
-        <p class="muted" style="margin:8px 0 0">Clone and deploy a public GitHub repository</p>
-        {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to deploy from GitHub</p>{% endif %}
+        <h2>🚀 Deploy Project</h2>
+        <button class="btn btn-primary" onclick="deployProject()" style="width:100%;justify-content:center" {% if not is_paid %}disabled{% endif %}>
+          🚀 Deploy Now
+        </button>
+        <p class="muted" style="margin:8px 0 0">Deploys the main Python file with all requirements and environment variables</p>
+        {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to deploy</p>{% endif %}
       </div>
 
       <!-- Files List -->
@@ -128,6 +125,7 @@
         </form>
         <p class="muted" style="margin:8px 0 8px">Allowed: <code>pip install &lt;mod&gt;</code> or <code>npm install &lt;mod&gt;</code></p>
         <div id="installLogs" style="background:#04060d;color:#9fd3ff;font-family:'JetBrains Mono',monospace;font-size:12px;padding:12px;border-radius:10px;height:140px;overflow:auto;white-space:pre-wrap;border:1px solid var(--border)"></div>
+        {% if not is_paid %}<p class="muted" style="margin:8px 0 0;color:#f59e0b">⚠️ Subscribe to install modules</p>{% endif %}
       </div>
     </div>
 
@@ -279,54 +277,39 @@ function clearEnvironmentVariables() {
     .catch(() => alert('❌ Error clearing environment variables.'));
 }
 
-// ==================== GITHUB DEPLOY ====================
-async function deployFromGitHub(event) {
-    event.preventDefault();
-    const repo = document.getElementById('github-repo').value.trim();
-    const branch = document.getElementById('github-branch').value.trim() || 'main';
-    const runCommand = document.getElementById('run-command').value.trim();
-    
-    if (!repo || !runCommand) {
-        alert('Please enter GitHub repo and run command');
-        return false;
-    }
-    
-    // Collect environment variables
-    const envVars = {};
-    envVariables.forEach(env => { envVars[env.key] = env.value; });
-    
-    const data = {
-        repo: repo,
-        branch: branch,
-        run_command: runCommand,
-        env_vars: envVars
-    };
+// ==================== DEPLOY PROJECT ====================
+async function deployProject() {
+    if (!confirm('Deploy this project with the current files and settings?')) return;
     
     try {
-        const response = await fetch('/deploy-github', {
+        const response = await fetch('/deploy-project', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
+            headers: { 'Content-Type': 'application/json' }
         });
-        
         const result = await response.json();
-        
         if (result.success) {
-            alert('✅ GitHub repository deployed successfully!');
-            // Reload page to show new files
+            alert('✅ ' + result.message);
             setTimeout(() => location.reload(), 1000);
         } else {
-            alert('❌ Deployment failed: ' + result.error);
+            alert('❌ ' + result.error);
         }
     } catch (error) {
         alert('❌ Error deploying: ' + error.message);
     }
-    
-    return false;
 }
 
-// ==================== REQUIREMENTS.UPLOAD ====================
-// Add requirements upload handler (handled by form action /upload-requirements)
+// ==================== REQUIREMENTS UPLOAD ====================
+// Requirements upload status
+document.addEventListener('DOMContentLoaded', function() {
+    const reqForm = document.querySelector('form[action="/upload-requirements"]');
+    if (reqForm) {
+        reqForm.addEventListener('submit', function(e) {
+            const status = document.getElementById('requirements-status');
+            status.innerHTML = '⏳ Uploading and installing requirements...';
+            status.style.color = '#fbbf24';
+        });
+    }
+});
 
 // ==================== EXISTING FUNCTIONS ====================
 async function post(url, body){
@@ -364,19 +347,7 @@ async function doInstall(e){
     return false;
 }
 
-// Requirements upload status
-document.addEventListener('DOMContentLoaded', function() {
-    const reqForm = document.querySelector('form[action="/upload-requirements"]');
-    if (reqForm) {
-        reqForm.addEventListener('submit', function(e) {
-            const status = document.getElementById('requirements-status');
-            status.innerHTML = '⏳ Uploading and installing requirements...';
-            status.style.color = '#fbbf24';
-        });
-    }
-});
-
-// Logs tick
+// ==================== LOGS ====================
 const logBox = document.getElementById('logs'), instBox = document.getElementById('installLogs');
 async function tick(){
     try{
