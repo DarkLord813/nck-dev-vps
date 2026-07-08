@@ -32,8 +32,9 @@
       
       {% if session.username %}
         {% set user_info = users.get(session.username) if users else None %}
+        {% set user_email = user_info.email if user_info else '' %}
         <button class="btn btn-primary" style="margin-top:14px;width:100%;justify-content:center" 
-                onclick="payWithFlutterwave('{{session.username}}', '{{p.name}}', '{{user_info.email if user_info else ''}}', document.getElementById('currency-selector').value)">
+                onclick="payWithFlutterwave('{{session.username}}', '{{p.name}}', '{{user_email}}', document.getElementById('currency-selector').value)">
           💳 Subscribe Now
         </button>
       {% else %}
@@ -80,9 +81,14 @@ function updatePrices(currency) {
 }
 
 async function payWithFlutterwave(username, planName, email, currency) {
-    if (!email) {
-        alert('Please add your email in your profile or contact support.');
-        return;
+    // If no email, prompt the user to enter it
+    if (!email || email === '') {
+        const userEmail = prompt('Please enter your email address for payment:');
+        if (!userEmail || !userEmail.includes('@')) {
+            alert('Please enter a valid email address.');
+            return;
+        }
+        email = userEmail;
     }
     
     try {
