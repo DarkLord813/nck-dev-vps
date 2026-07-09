@@ -63,15 +63,13 @@
       <div>
         <h2 style="margin:0">📁 {{project_name}}</h2>
         <p class="muted">{{project_description or 'No description'}}</p>
+        <p class="muted" style="font-size:12px;margin:4px 0">Type: {{project_type}} | Framework: {{project_framework}}</p>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         {% if project_is_running %}
-        <span class="badge badge-on">🟢 Running</span>
+        <span class="badge badge-on">🟢 Running on port {{project_port}}</span>
         {% else %}
         <span class="badge badge-off">🔴 Stopped</span>
-        {% endif %}
-        {% if project_port %}
-        <span class="badge badge-subscription">🔌 Port: {{project_port}}</span>
         {% endif %}
         <a href="/project/{{project_id}}" class="btn btn-primary btn-sm">🔧 Manage Project</a>
       </div>
@@ -104,7 +102,7 @@
         <input type="file" name="files" multiple required style="flex:1" {% if not is_paid %}disabled{% endif %}>
         <button class="btn btn-primary" {% if not is_paid %}disabled{% endif %}>Upload</button>
       </form>
-      <p class="muted" style="margin:4px 0 0">.py · .js · .sh · .txt · .json · .zip · .tar.gz</p>
+      <p class="muted" style="margin:4px 0 0">.py · .js · .sh · .txt · .json · .zip · .tar.gz (auto-extract)</p>
     </div>
   </div>
 
@@ -114,7 +112,7 @@
       <h3>📦 Requirements</h3>
       <form method="post" action="/upload-requirements" enctype="multipart/form-data" class="row">
         <input type="file" name="requirements" accept=".txt" required style="flex:1" {% if not is_paid %}disabled{% endif %}>
-        <button class="btn btn-warn btn-sm" {% if not is_paid %}disabled{% endif %}>Upload</button>
+        <button class="btn btn-warn btn-sm" {% if not is_paid %}disabled{% endif %}>Upload & Install</button>
       </form>
       <div id="requirements-status" style="margin-top:4px;font-size:12px;"></div>
     </div>
@@ -127,9 +125,9 @@
         <button class="btn btn-primary btn-sm" type="submit" {% if not is_paid %}disabled{% endif %}>+</button>
       </form>
       <div id="env-list" style="margin-top:4px;max-height:80px;overflow-y:auto;font-size:12px;"></div>
-      <div style="display:flex;gap:4px;margin-top:4px">
+      <div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">
         <button class="btn btn-ok btn-sm" onclick="saveEnvironmentVariables()" {% if not is_paid %}disabled{% endif %}>💾 Save</button>
-        <button class="btn btn-danger btn-sm" onclick="clearEnvironmentVariables()" {% if not is_paid %}disabled{% endif %}>🗑️</button>
+        <button class="btn btn-danger btn-sm" onclick="clearEnvironmentVariables()" {% if not is_paid %}disabled{% endif %}>🗑️ Clear</button>
       </div>
     </div>
     
@@ -138,7 +136,7 @@
       <button class="btn btn-primary" onclick="deployProject()" style="width:100%" {% if not is_paid %}disabled{% endif %}>
         🚀 Deploy Now
       </button>
-      <p class="muted" style="margin:4px 0 0;font-size:12px">Deploys main Python file</p>
+      <p class="muted" style="margin:4px 0 0;font-size:12px">Deploys and starts your project</p>
     </div>
   </div>
   {% endif %}
@@ -294,7 +292,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (reqForm) {
         reqForm.addEventListener('submit', function(e) {
             const status = document.getElementById('requirements-status');
-            status.innerHTML = '⏳ Uploading...';
+            status.innerHTML = '⏳ Installing requirements...';
             status.style.color = '#fbbf24';
         });
     }

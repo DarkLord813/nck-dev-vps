@@ -94,7 +94,7 @@ code{background:rgba(99,102,241,0.12);color:#c7d2fe;padding:2px 6px;border-radiu
   <div class="nav-links">
     <a href="/home">Home</a>
     <a href="/pricing">Pricing</a>
-    {% if session.username %}
+    {% if session and session.username %}
       <a href="/dashboard" class="btn btn-ghost btn-sm">📊 Dashboard</a>
       <span class="muted">{{session.username}}</span>
       <a href="/logout" class="btn btn-danger btn-sm">Logout</a>

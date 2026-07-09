@@ -4,7 +4,7 @@
   <section style="text-align:center;padding:30px 0">
     <h1>💎 <span class="gradient-text">Pricing</span> & Plans</h1>
     <p class="muted">Choose a plan, subscribe, and start deploying your bots on NCK Dev VPS!</p>
-    {% if not session.username %}
+    {% if not session or not session.username %}
       <p class="muted" style="margin-top:10px">👉 <a href="/register" style="color:var(--primary);font-weight:600">Sign up first</a> then subscribe to a plan</p>
     {% endif %}
   </section>
@@ -30,7 +30,7 @@
       <div class="muted" style="margin-bottom:16px">{{p.duration}}</div>
       <div style="font-size:14px;color:#c7cce8;min-height:70px">{{p.features}}</div>
       
-      {% if session.username %}
+      {% if session and session.username %}
         {% set user_info = users.get(session.username) if users else None %}
         {% set user_email = user_info.email if user_info else '' %}
         <button class="btn btn-primary" style="margin-top:14px;width:100%;justify-content:center" 
@@ -75,9 +75,13 @@ function updatePrices(currency) {
     const symbol = currencySymbols[currency] || "₦";
     const prices = currencyPrices[currency] || currencyPrices["NGN"];
     
-    document.getElementById("price-Basic").textContent = `${symbol}${prices["Basic"]}`;
-    document.getElementById("price-Pro").textContent = `${symbol}${prices["Pro"]}`;
-    document.getElementById("price-Premium").textContent = `${symbol}${prices["Premium"]}`;
+    const basicEl = document.getElementById("price-Basic");
+    const proEl = document.getElementById("price-Pro");
+    const premiumEl = document.getElementById("price-Premium");
+    
+    if (basicEl) basicEl.textContent = `${symbol}${prices["Basic"]}`;
+    if (proEl) proEl.textContent = `${symbol}${prices["Pro"]}`;
+    if (premiumEl) premiumEl.textContent = `${symbol}${prices["Premium"]}`;
 }
 
 async function payWithFlutterwave(username, planName, email, currency) {
