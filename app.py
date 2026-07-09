@@ -19,6 +19,8 @@ from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 import ipaddress
 import hmac
+import logging
+from logging.handlers import RotatingFileHandler
 
 # Optional SSL (if installed)
 try:
@@ -104,6 +106,24 @@ if not PROJECTS_FILE.exists():
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500MB
+
+# ==================== LOGGING CONFIGURATION ====================
+if not app.debug:
+    LOG_DIR = APP_DIR / "logs"
+    LOG_DIR.mkdir(exist_ok=True)
+    
+    file_handler = RotatingFileHandler(
+        LOG_DIR / "app.log",
+        maxBytes=10485760,
+        backupCount=10
+    )
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
+    ))
+    file_handler.setLevel(logging.INFO)
+    app.logger.addHandler(file_handler)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info('Application startup')
 
 # ==================== GITHUB BACKUP SYSTEM ====================
 class GitHubBackupSystem:
@@ -356,8 +376,18 @@ class ProjectDeploymentEngine:
         has_requirements = (project_dir / "requirements.txt").exists()
         
         # Check for specific frameworks
-        has_flask = any("flask" in f.read_text().lower() if f.is_file() else False for f in py_files[:5])
-        has_django = any("django" in f.read_text().lower() if f.is_file() else False for f in py_files[:5])
+        has_flask = False
+        has_django = False
+        for f in py_files[:5]:
+            if f.is_file():
+                try:
+                    content = f.read_text().lower()
+                    if "flask" in content:
+                        has_flask = True
+                    if "django" in content:
+                        has_django = True
+                except:
+                    pass
         
         # Check for Node.js
         has_package_json = (project_dir / "package.json").exists()
@@ -374,9 +404,12 @@ class ProjectDeploymentEngine:
         elif has_flask:
             # Find main Flask app file
             for f in py_files:
-                content = f.read_text().lower()
-                if "flask" in content and ("app.run" in content or "__name__" in content):
-                    return "flask", f"python {f.name}"
+                try:
+                    content = f.read_text().lower()
+                    if "flask" in content and ("app.run" in content or "__name__" in content):
+                        return "flask", f"python {f.name}"
+                except:
+                    pass
             return "flask", "python app.py"
         elif has_requirements and py_files:
             return "python", f"python {py_files[0].name}"
@@ -410,7 +443,7 @@ class ProjectDeploymentEngine:
         project_dir = Path(project_dir)
         results = []
         
-        if project_type == "python" or project_type == "flask" or project_type == "django":
+        if project_type in ["python", "flask", "django"]:
             # Check for requirements.txt
             req_file = project_dir / "requirements.txt"
             if req_file.exists():
@@ -440,7 +473,6 @@ class ProjectDeploymentEngine:
             if pkg_file.exists():
                 try:
                     print(f"📦 Installing Node.js dependencies from {pkg_file}")
-                    # Check if npm is available
                     npm_check = subprocess.run(['npm', '--version'], capture_output=True, timeout=5)
                     if npm_check.returncode == 0:
                         result = subprocess.run(
@@ -478,14 +510,12 @@ class ProjectDeploymentEngine:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith('#'):
-                            # Handle both KEY=value and export KEY=value formats
                             if line.startswith('export '):
                                 line = line[7:]
                             parts = line.split('=', 1)
                             if len(parts) == 2:
                                 key = parts[0].strip()
                                 value = parts[1].strip()
-                                # Remove quotes if present
                                 if (value.startswith('"') and value.endswith('"')) or \
                                    (value.startswith("'") and value.endswith("'")):
                                     value = value[1:-1]
@@ -593,6 +623,21 @@ def save_projects(projects):
         PROJECTS_FILE.write_text(json.dumps(projects, indent=2))
     threading.Thread(target=lambda: manual_backup("Projects data changed"), daemon=True).start()
 
+def update_project_files(username, project_id):
+    """Update the files list for a project"""
+    try:
+        projects = load_projects()
+        if username in projects and project_id in projects[username]:
+            project_dir = FILES_ROOT / username / project_id
+            if project_dir.exists():
+                projects[username][project_id]["files"] = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
+                projects[username][project_id]["updated_at"] = time.time()
+                save_projects(projects)
+                return True
+    except Exception as e:
+        app.logger.error(f"Error updating project files: {str(e)}")
+    return False
+
 # ==================== AUTH ====================
 def is_owner():
     return session.get("role") == "owner"
@@ -681,7 +726,6 @@ def create_project(username, project_name, description=""):
     project_dir = FILES_ROOT / username / project_id
     project_dir.mkdir(parents=True, exist_ok=True)
     
-    # Backup after project creation
     threading.Thread(target=lambda: manual_backup(f"Project created: {project_name} by {username}"), daemon=True).start()
     
     return project_id
@@ -697,7 +741,6 @@ def delete_project(username, project_id):
         del projects[username][project_id]
         save_projects(projects)
         
-        # Backup after project deletion
         threading.Thread(target=lambda: manual_backup(f"Project deleted: {project_id} by {username}"), daemon=True).start()
         return True
     return False
@@ -741,7 +784,6 @@ def deploy_project_files(username, project_id):
         projects[username][project_id]["deployment_log"] = install_results
         save_projects(projects)
     
-    # Backup after deployment
     threading.Thread(target=lambda: manual_backup(f"Project deployed: {project['name']} by {username}"), daemon=True).start()
     
     return True, install_results
@@ -759,11 +801,9 @@ def start_project_process(username, project_id):
     run_command = project.get("run_command", "")
     
     if not run_command:
-        # Try to auto-detect
         analysis = deployment_engine.analyze_project(project_dir)
         if analysis["run_command"]:
             run_command = analysis["run_command"]
-            # Save it
             projects = load_projects()
             if username in projects and project_id in projects[username]:
                 projects[username][project_id]["run_command"] = run_command
@@ -779,7 +819,6 @@ def start_project_process(username, project_id):
         if project.get("port"):
             env["PORT"] = str(project["port"])
         
-        # Replace $PORT in command
         if project.get("port"):
             run_command = run_command.replace("$PORT", str(project["port"]))
         
@@ -1184,993 +1223,1270 @@ def payment_cancel():
     flash("Payment cancelled. You can try again anytime.", "error")
     return redirect(url_for("pricing_page"))
 
-# ==================== USER DASHBOARD ROUTES ====================
+# ==================== USER DASHBOARD ROUTES (FIXED) ====================
 
 @app.route("/dashboard")
 @require_user
 def user_dashboard():
-    u = current_user()
-    users = load_users()
-    info = users.get(u, {})
-    is_paid = info.get("payment_status") == "paid"
-    
-    # Get user's first project
-    projects = get_user_projects(u)
-    project_id = None
-    project_name = None
-    project_description = None
-    project_files = []
-    project_is_running = False
-    project_port = None
-    project_deployment_status = "not_deployed"
-    
-    if projects:
-        project_id = list(projects.keys())[0]
-        project = projects[project_id]
-        project_name = project.get("name", "My Project")
-        project_description = project.get("description", "")
-        project_files = project.get("files", [])
-        project_is_running = is_project_running(u, project_id)
-        project_port = project.get("port")
-        project_deployment_status = project.get("deployment_status", "not_deployed")
-    
-    return render_template("user.html",
-        username=u,
-        info=info,
-        subscription=info.get("subscription", "Basic"),
-        is_paid=is_paid,
-        email=info.get("email", ""),
-        project_id=project_id,
-        project_name=project_name,
-        project_description=project_description,
-        project_files=project_files,
-        project_is_running=project_is_running,
-        project_port=project_port,
-        project_deployment_status=project_deployment_status
-    )
-
-# ==================== USER WORKFLOW ROUTES ====================
-
-@app.route("/upload", methods=["POST"])
-@require_user
-def upload():
-    u = current_user()
-    users = load_users()
-    
-    if users.get(u, {}).get("payment_status") != "paid":
-        flash("Please subscribe to a plan!", "error")
-        return redirect(url_for("user_dashboard"))
-    
-    # Get or create a default project
-    projects = get_user_projects(u)
-    project_id = None
-    
-    if projects:
-        project_id = list(projects.keys())[0]
-    else:
-        project_id = create_project(u, "My Project", "Default project")
-        flash(f"📁 Created default project: My Project", "info")
-    
-    if not project_id:
-        flash("❌ Failed to create project!", "error")
-        return redirect(url_for("user_dashboard"))
-    
-    project_dir = FILES_ROOT / u / project_id
-    project_dir.mkdir(parents=True, exist_ok=True)
-    
-    files = request.files.getlist("files")
-    uploaded_count = 0
-    extracted_count = 0
-    deployment_results = []
-    
-    for f in files:
-        if f and f.filename:
-            name = secure_filename(f.filename)
-            if name:
-                file_path = project_dir / name
-                f.save(file_path)
-                
-                # Check if it's a zip/tar file
-                if name.endswith('.zip') or name.endswith('.tar.gz') or name.endswith('.tgz') or name.endswith('.tar'):
-                    try:
-                        if name.endswith('.zip'):
-                            with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                                zip_ref.extractall(project_dir)
-                        else:
-                            if name.endswith('.tar.gz') or name.endswith('.tgz'):
-                                with tarfile.open(file_path, 'r:gz') as tar_ref:
-                                    tar_ref.extractall(project_dir)
-                            else:
-                                with tarfile.open(file_path, 'r') as tar_ref:
-                                    tar_ref.extractall(project_dir)
-                        os.remove(file_path)
-                        extracted_count += 1
-                    except Exception as e:
-                        flash(f"❌ Failed to extract {name}: {str(e)}", "error")
-                else:
-                    uploaded_count += 1
-    
-    # Auto-deploy the project
-    if uploaded_count > 0 or extracted_count > 0:
-        success, results = deploy_project_files(u, project_id)
-        if success:
-            flash(f"✅ {uploaded_count} files uploaded, {extracted_count} archives extracted, project deployed!", "success")
-        else:
-            flash(f"⚠️ Files uploaded but deployment failed: {results}", "warning")
-    else:
-        flash("⚠️ No files were uploaded.", "warning")
-    
-    # Update project files list
-    projects = load_projects()
-    if u in projects and project_id in projects[u]:
-        projects[u][project_id]["files"] = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
-        projects[u][project_id]["updated_at"] = time.time()
-        save_projects(projects)
-    
-    # Backup after file upload
-    threading.Thread(target=lambda: manual_backup(f"Files uploaded to project {project_id} by {u}"), daemon=True).start()
-    
-    return redirect(url_for("user_dashboard"))
-
-@app.route("/upload-requirements", methods=["POST"])
-@require_user
-def upload_requirements():
-    u = current_user()
-    users = load_users()
-    
-    if users.get(u, {}).get("payment_status") != "paid":
-        flash("Please subscribe to a plan!", "error")
-        return redirect(url_for("user_dashboard"))
-    
-    projects = get_user_projects(u)
-    project_id = None
-    
-    if projects:
-        project_id = list(projects.keys())[0]
-    else:
-        project_id = create_project(u, "My Project", "Default project")
-        flash(f"📁 Created default project: My Project", "info")
-    
-    if not project_id:
-        flash("❌ Failed to create project!", "error")
-        return redirect(url_for("user_dashboard"))
-    
-    project_dir = FILES_ROOT / u / project_id
-    project_dir.mkdir(parents=True, exist_ok=True)
-    
-    if 'requirements' not in request.files:
-        flash("No file uploaded!", "error")
-        return redirect(url_for("user_dashboard"))
-    
-    file = request.files['requirements']
-    if file.filename == '' or not file.filename.endswith('.txt'):
-        flash("Please upload a valid requirements.txt file!", "error")
-        return redirect(url_for("user_dashboard"))
-    
-    name = secure_filename(file.filename)
-    file.save(project_dir / name)
-    
-    # Install requirements
+    """User dashboard showing project overview"""
     try:
-        print(f"📦 Installing requirements for {u}/{project_id}")
-        result = subprocess.run(
-            ['pip', 'install', '-r', str(project_dir / name)],
-            cwd=str(project_dir),
-            capture_output=True,
-            text=True,
-            timeout=300
+        u = current_user()
+        users = load_users()
+        info = users.get(u, {})
+        is_paid = info.get("payment_status") == "paid"
+        
+        # Get user's projects
+        projects = get_user_projects(u)
+        
+        # Get first project or create one
+        project_id = None
+        project_name = None
+        project_description = None
+        project_files = []
+        project_is_running = False
+        project_port = None
+        project_deployment_status = "not_deployed"
+        project_has_files = False
+        project_type = "unknown"
+        framework = "unknown"
+        
+        if projects:
+            project_id = list(projects.keys())[0]
+            project = projects[project_id]
+            project_name = project.get("name", "My Project")
+            project_description = project.get("description", "")
+            project_files = project.get("files", [])
+            project_is_running = is_project_running(u, project_id)
+            project_port = project.get("port")
+            project_deployment_status = project.get("deployment_status", "not_deployed")
+            project_type = project.get("project_type", "unknown")
+            framework = project.get("framework", "unknown")
+            
+            # Check if project has any files
+            project_dir = FILES_ROOT / u / project_id
+            project_has_files = project_dir.exists() and any(project_dir.iterdir())
+        
+        # Check if user has any projects
+        has_projects = len(projects) > 0
+        
+        return render_template("user_dashboard.html",
+            username=u,
+            info=info,
+            subscription=info.get("subscription", "Basic"),
+            is_paid=is_paid,
+            email=info.get("email", ""),
+            project_id=project_id,
+            project_name=project_name,
+            project_description=project_description,
+            project_files=project_files,
+            project_is_running=project_is_running,
+            project_port=project_port,
+            project_deployment_status=project_deployment_status,
+            project_has_files=project_has_files,
+            has_projects=has_projects,
+            total_projects=len(projects),
+            projects=projects,
+            project_type=project_type,
+            framework=framework
         )
-        
-        if result.returncode == 0:
-            flash(f"✅ Requirements installed successfully!", "success")
-        else:
-            flash(f"⚠️ Some packages failed to install: {result.stderr[:200]}", "warning")
-    except subprocess.TimeoutExpired:
-        flash("❌ Installation timed out. Some packages may be too large.", "error")
     except Exception as e:
-        flash(f"❌ Error installing requirements: {str(e)}", "error")
-    
-    # Update project files
-    projects = load_projects()
-    if u in projects and project_id in projects[u]:
-        projects[u][project_id]["files"] = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
-        projects[u][project_id]["updated_at"] = time.time()
-        projects[u][project_id]["dependencies_installed"] = True
-        save_projects(projects)
-    
-    threading.Thread(target=lambda: manual_backup(f"Requirements uploaded for project {project_id} by {u}"), daemon=True).start()
-    
-    return redirect(url_for("user_dashboard"))
+        app.logger.error(f"Error in user_dashboard: {str(e)}")
+        flash("Error loading dashboard", "error")
+        return render_template("user_dashboard.html", 
+            username=current_user(), 
+            error=str(e),
+            has_projects=False,
+            is_paid=False
+        )
 
-@app.route("/deploy-project", methods=["POST"])
+@app.route("/dashboard/project/<project_id>")
 @require_user
-def deploy_project():
-    u = current_user()
-    users = load_users()
-    
-    if users.get(u, {}).get("payment_status") != "paid":
-        return jsonify({"success": False, "error": "Please subscribe to a plan to deploy!"}), 400
-    
-    projects = get_user_projects(u)
-    if not projects:
-        return jsonify({"success": False, "error": "No project found! Please upload a file first."}), 400
-    
-    project_id = list(projects.keys())[0]
-    project = projects[project_id]
-    
-    # Use the deployment engine
-    success, results = deploy_project_files(u, project_id)
-    
-    if success:
-        # Try to start the project if run command is set
+def dashboard_project_detail(project_id):
+    """View a specific project from dashboard"""
+    try:
+        u = current_user()
         project = get_project(u, project_id)
-        if project and project.get("run_command"):
-            start_success, start_msg = start_project_process(u, project_id)
-            if start_success:
-                return jsonify({
-                    "success": True, 
-                    "message": f"Project deployed and started! {start_msg}",
-                    "deployment_log": results
-                })
-            else:
-                return jsonify({
-                    "success": True,
-                    "message": f"Project deployed but failed to start: {start_msg}",
-                    "deployment_log": results
-                })
-        else:
-            return jsonify({
-                "success": True,
-                "message": "Project deployed successfully. Set a run command to start it.",
-                "deployment_log": results
-            })
-    else:
-        return jsonify({"success": False, "error": results}), 400
-
-@app.route("/project/<project_id>/analyze", methods=["GET"])
-@require_user
-def analyze_project(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    
-    project_dir = FILES_ROOT / u / project_id
-    if not project_dir.exists():
-        return jsonify({"success": False, "error": "Project directory not found"}), 404
-    
-    analysis = deployment_engine.analyze_project(project_dir)
-    return jsonify({
-        "success": True,
-        "analysis": analysis,
-        "run_command": project.get("run_command", "")
-    })
-
-@app.route("/project/<project_id>/auto-deploy", methods=["POST"])
-@require_user
-def auto_deploy_project(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    
-    success, results = deploy_project_files(u, project_id)
-    
-    if success:
-        return jsonify({
-            "success": True,
-            "message": "Project auto-deployed successfully",
-            "deployment_log": results
-        })
-    else:
-        return jsonify({"success": False, "error": results}), 400
-
-@app.route("/get-env-vars")
-@require_user
-def get_env_vars():
-    u = current_user()
-    projects = get_user_projects(u)
-    project_id = list(projects.keys())[0] if projects else None
-    
-    if not project_id:
-        return jsonify({"env_vars": []})
-    
-    project = get_project(u, project_id)
-    if project:
-        env_vars = project.get("env_vars", {})
-        # Convert to list for frontend
-        env_list = [{"key": k, "value": v} for k, v in env_vars.items()]
-        return jsonify({"env_vars": env_list})
-    
-    return jsonify({"env_vars": []})
-
-@app.route("/save-env-vars", methods=["POST"])
-@require_user
-def save_env_vars():
-    u = current_user()
-    projects = get_user_projects(u)
-    project_id = list(projects.keys())[0] if projects else None
-    
-    if not project_id:
-        return jsonify({"success": False, "error": "No project found"}), 400
-    
-    data = request.json
-    env_vars = data.get("env_vars", [])
-    
-    # Convert to dict
-    env_dict = {}
-    for env in env_vars:
-        if env.get("key") and env.get("value"):
-            env_dict[env["key"]] = env["value"]
-    
-    # Save to project
-    projects = load_projects()
-    if u in projects and project_id in projects[u]:
-        projects[u][project_id]["env_vars"] = env_dict
-        save_projects(projects)
         
-        # Also save to .env file
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("user_dashboard"))
+        
         project_dir = FILES_ROOT / u / project_id
-        env_file = project_dir / ".env"
-        try:
-            with open(env_file, 'w') as f:
-                for key, value in env_dict.items():
-                    f.write(f"{key}={value}\n")
-        except Exception as e:
-            return jsonify({"success": False, "error": f"Failed to save .env: {str(e)}"}), 500
+        files = []
+        if project_dir.exists():
+            files = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
         
-        threading.Thread(target=lambda: manual_backup(f"Environment variables saved for {project_id} by {u}"), daemon=True).start()
-        return jsonify({"success": True})
-    
-    return jsonify({"success": False, "error": "Failed to save"}), 500
+        project["files"] = files
+        project["is_running"] = is_project_running(u, project_id)
+        project["logs"] = get_project_logs(u, project_id, 100)
+        resources = get_project_resources(u, project_id)
+        project["cpu"] = resources["cpu"]
+        project["ram_mb"] = resources["ram_mb"]
+        
+        # Analyze project for more info
+        analysis = deployment_engine.analyze_project(project_dir)
+        project["project_type"] = analysis.get("project_type", "unknown")
+        project["framework"] = analysis.get("framework", "unknown")
+        project["deployment_status"] = project.get("deployment_status", "not_deployed")
+        
+        return render_template("project_detail.html", 
+            username=u, 
+            project=project, 
+            files=files, 
+            analysis=analysis
+        )
+    except Exception as e:
+        app.logger.error(f"Error in dashboard_project_detail: {str(e)}")
+        flash(f"Error loading project: {str(e)}", "error")
+        return redirect(url_for("user_dashboard"))
 
-@app.route("/clear-env-vars", methods=["POST"])
-@require_user
-def clear_env_vars():
-    u = current_user()
-    projects = get_user_projects(u)
-    project_id = list(projects.keys())[0] if projects else None
-    
-    if not project_id:
-        return jsonify({"success": False, "error": "No project found"}), 400
-    
-    projects = load_projects()
-    if u in projects and project_id in projects[u]:
-        projects[u][project_id]["env_vars"] = {}
-        save_projects(projects)
-        
-        # Also remove .env file
-        project_dir = FILES_ROOT / u / project_id
-        env_file = project_dir / ".env"
-        if env_file.exists():
-            env_file.unlink()
-        
-        threading.Thread(target=lambda: manual_backup(f"Environment variables cleared for {project_id} by {u}"), daemon=True).start()
-        return jsonify({"success": True})
-    
-    return jsonify({"success": False, "error": "Failed to clear"}), 500
+# ==================== FILE MANAGEMENT ROUTES (FIXED) ====================
 
 @app.route("/file/delete/<name>", methods=["POST"])
 @require_user
 def file_delete(name):
-    u = current_user()
-    projects = get_user_projects(u)
-    project_id = list(projects.keys())[0] if projects else None
-    
-    if not project_id:
-        flash("No project found!", "error")
-        return redirect(url_for("user_dashboard"))
-    
-    project_dir = FILES_ROOT / u / project_id
-    filepath = project_dir / secure_filename(name)
-    
-    if filepath.exists() and filepath.is_file():
-        filepath.unlink()
-        flash(f"File '{name}' deleted!", "success")
+    """Delete a file from the user's project"""
+    try:
+        u = current_user()
+        projects = get_user_projects(u)
         
-        # Update project files
-        projects = load_projects()
-        if u in projects and project_id in projects[u]:
-            projects[u][project_id]["files"] = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
-            save_projects(projects)
-    else:
-        flash("File not found!", "error")
+        if not projects:
+            flash("No project found!", "error")
+            return redirect(url_for("user_dashboard"))
+        
+        # Get the first project
+        project_id = list(projects.keys())[0]
+        project_dir = FILES_ROOT / u / project_id
+        
+        # Secure the filename
+        safe_name = secure_filename(name)
+        if not safe_name:
+            flash("Invalid filename!", "error")
+            return redirect(url_for("user_dashboard"))
+        
+        filepath = project_dir / safe_name
+        
+        if filepath.exists() and filepath.is_file():
+            # Don't delete critical files
+            if safe_name in ['.env', 'requirements.txt', 'run_command.txt']:
+                flash(f"Cannot delete {safe_name}. Use the appropriate management interface.", "warning")
+                return redirect(url_for("user_dashboard"))
+            
+            filepath.unlink()
+            flash(f"File '{name}' deleted successfully!", "success")
+            
+            # Update project files list
+            update_project_files(u, project_id)
+            
+            # Trigger backup
+            threading.Thread(target=lambda: manual_backup(f"File deleted: {name} by {u}"), daemon=True).start()
+        else:
+            flash("File not found!", "error")
+        
+    except Exception as e:
+        app.logger.error(f"Error deleting file {name}: {str(e)}")
+        flash(f"Error deleting file: {str(e)}", "error")
     
     return redirect(url_for("user_dashboard"))
+
+@app.route("/project/<project_id>/file/delete/<filename>", methods=["POST"])
+@require_user
+def project_file_delete(project_id, filename):
+    """Delete a file from a specific project"""
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
+        
+        project_dir = FILES_ROOT / u / project_id
+        
+        # Secure the filename
+        safe_name = secure_filename(filename)
+        if not safe_name:
+            flash("Invalid filename!", "error")
+            return redirect(url_for("project_detail", project_id=project_id))
+        
+        filepath = project_dir / safe_name
+        
+        if filepath.exists() and filepath.is_file():
+            # Don't delete critical files
+            if safe_name in ['.env', 'requirements.txt', 'run_command.txt']:
+                flash(f"Cannot delete {safe_name}. Use the appropriate management interface.", "warning")
+                return redirect(url_for("project_detail", project_id=project_id))
+            
+            filepath.unlink()
+            flash(f"File '{filename}' deleted successfully!", "success")
+            
+            # Update project files list
+            update_project_files(u, project_id)
+            
+            # Trigger backup
+            threading.Thread(target=lambda: manual_backup(f"File deleted: {filename} from project {project_id} by {u}"), daemon=True).start()
+        else:
+            flash("File not found!", "error")
+            
+    except Exception as e:
+        app.logger.error(f"Error deleting file {filename} from project {project_id}: {str(e)}")
+        flash(f"Error deleting file: {str(e)}", "error")
+    
+    return redirect(url_for("project_detail", project_id=project_id))
+
+@app.route("/project/<project_id>/file/delete-all", methods=["POST"])
+@require_user
+def project_delete_all_files(project_id):
+    """Delete all files from a project"""
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
+        
+        project_dir = FILES_ROOT / u / project_id
+        
+        # Confirm action
+        confirm = request.form.get("confirm", "").strip()
+        if confirm != "yes":
+            flash("Confirmation required! Type 'yes' to delete all files.", "warning")
+            return redirect(url_for("project_detail", project_id=project_id))
+        
+        # Delete all files except critical ones
+        deleted_count = 0
+        for item in project_dir.iterdir():
+            if item.is_file() and item.name not in ['.env', 'requirements.txt', 'run_command.txt']:
+                try:
+                    item.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    app.logger.error(f"Error deleting {item.name}: {e}")
+        
+        flash(f"Deleted {deleted_count} files!", "success")
+        
+        # Update project files list
+        update_project_files(u, project_id)
+        
+        # Trigger backup
+        threading.Thread(target=lambda: manual_backup(f"All files deleted from project {project_id} by {u}"), daemon=True).start()
+            
+    except Exception as e:
+        app.logger.error(f"Error deleting all files from project {project_id}: {str(e)}")
+        flash(f"Error deleting files: {str(e)}", "error")
+    
+    return redirect(url_for("project_detail", project_id=project_id))
 
 @app.route("/file/view/<name>")
 @require_user
 def file_view(name):
-    u = current_user()
-    projects = get_user_projects(u)
-    project_id = list(projects.keys())[0] if projects else None
-    
-    if not project_id:
-        flash("No project found!", "error")
+    """View a file from the user's project"""
+    try:
+        u = current_user()
+        projects = get_user_projects(u)
+        
+        if not projects:
+            flash("No project found!", "error")
+            return redirect(url_for("user_dashboard"))
+        
+        project_id = list(projects.keys())[0]
+        project_dir = FILES_ROOT / u / project_id
+        
+        safe_name = secure_filename(name)
+        if not safe_name:
+            flash("Invalid filename!", "error")
+            return redirect(url_for("user_dashboard"))
+        
+        filepath = project_dir / safe_name
+        
+        if not filepath.exists() or not filepath.is_file():
+            flash("File not found!", "error")
+            return redirect(url_for("user_dashboard"))
+        
+        return send_from_directory(project_dir, safe_name, as_attachment=False)
+        
+    except Exception as e:
+        app.logger.error(f"Error viewing file {name}: {str(e)}")
+        flash(f"Error viewing file: {str(e)}", "error")
         return redirect(url_for("user_dashboard"))
-    
-    project_dir = FILES_ROOT / u / project_id
-    return send_from_directory(project_dir, secure_filename(name), as_attachment=False)
 
-@app.route("/logs")
+@app.route("/project/<project_id>/file/view/<filename>")
 @require_user
-def logs_api():
-    u = current_user()
-    projects = get_user_projects(u)
-    project_id = list(projects.keys())[0] if projects else None
-    
-    if not project_id:
+def project_file_view(project_id, filename):
+    """View a file from a specific project"""
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
+        
+        project_dir = FILES_ROOT / u / project_id
+        
+        safe_name = secure_filename(filename)
+        if not safe_name:
+            flash("Invalid filename!", "error")
+            return redirect(url_for("project_detail", project_id=project_id))
+        
+        filepath = project_dir / safe_name
+        
+        if not filepath.exists() or not filepath.is_file():
+            flash("File not found!", "error")
+            return redirect(url_for("project_detail", project_id=project_id))
+        
+        return send_from_directory(project_dir, safe_name, as_attachment=False)
+        
+    except Exception as e:
+        app.logger.error(f"Error viewing file {filename} from project {project_id}: {str(e)}")
+        flash(f"Error viewing file: {str(e)}", "error")
+        return redirect(url_for("project_detail", project_id=project_id))
+
+@app.route("/project/<project_id>/file/download/<filename>")
+@require_user
+def project_file_download(project_id, filename):
+    """Download a file from a specific project"""
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
+        
+        project_dir = FILES_ROOT / u / project_id
+        
+        safe_name = secure_filename(filename)
+        if not safe_name:
+            flash("Invalid filename!", "error")
+            return redirect(url_for("project_detail", project_id=project_id))
+        
+        filepath = project_dir / safe_name
+        
+        if not filepath.exists() or not filepath.is_file():
+            flash("File not found!", "error")
+            return redirect(url_for("project_detail", project_id=project_id))
+        
+        return send_from_directory(project_dir, safe_name, as_attachment=True)
+        
+    except Exception as e:
+        app.logger.error(f"Error downloading file {filename} from project {project_id}: {str(e)}")
+        flash(f"Error downloading file: {str(e)}", "error")
+        return redirect(url_for("project_detail", project_id=project_id))
+
+@app.route("/project/<project_id>/files")
+@require_user
+def project_list_files(project_id):
+    """List all files in a project"""
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        
+        if not project:
+            return jsonify({"success": False, "error": "Project not found"}), 404
+        
+        project_dir = FILES_ROOT / u / project_id
+        
+        files = []
+        if project_dir.exists():
+            for item in project_dir.iterdir():
+                if item.is_file():
+                    stat = item.stat()
+                    files.append({
+                        "name": item.name,
+                        "size": stat.st_size,
+                        "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        "extension": item.suffix.lower()
+                    })
+        
+        files.sort(key=lambda x: x["name"])
+        
         return jsonify({
-            "running": False,
-            "file": None,
-            "logs": ["No project found"],
-            "install": [],
-            "subscription": "Basic"
+            "success": True,
+            "files": files,
+            "total": len(files)
         })
+        
+    except Exception as e:
+        app.logger.error(f"Error listing files for project {project_id}: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/project/<project_id>/file/rename", methods=["POST"])
+@require_user
+def project_file_rename(project_id):
+    """Rename a file in a project"""
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        
+        if not project:
+            return jsonify({"success": False, "error": "Project not found"}), 404
+        
+        old_name = request.form.get("old_name", "").strip()
+        new_name = request.form.get("new_name", "").strip()
+        
+        if not old_name or not new_name:
+            return jsonify({"success": False, "error": "Both old and new names are required"}), 400
+        
+        project_dir = FILES_ROOT / u / project_id
+        
+        old_path = project_dir / secure_filename(old_name)
+        new_path = project_dir / secure_filename(new_name)
+        
+        if not old_path.exists() or not old_path.is_file():
+            return jsonify({"success": False, "error": "Source file not found"}), 404
+        
+        if new_path.exists():
+            return jsonify({"success": False, "error": "A file with this name already exists"}), 400
+        
+        old_path.rename(new_path)
+        
+        # Update project files list
+        update_project_files(u, project_id)
+        
+        # Trigger backup
+        threading.Thread(target=lambda: manual_backup(f"File renamed: {old_name} -> {new_name} in project {project_id} by {u}"), daemon=True).start()
+        
+        return jsonify({"success": True, "message": "File renamed successfully"})
+        
+    except Exception as e:
+        app.logger.error(f"Error renaming file in project {project_id}: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# ==================== UPLOAD ROUTES (FIXED) ====================
+
+@app.route("/upload", methods=["POST"])
+@require_user
+def upload():
+    try:
+        u = current_user()
+        users = load_users()
+        
+        if users.get(u, {}).get("payment_status") != "paid":
+            flash("Please subscribe to a plan!", "error")
+            return redirect(url_for("user_dashboard"))
+        
+        # Get or create a default project
+        projects = get_user_projects(u)
+        project_id = None
+        
+        if projects:
+            project_id = list(projects.keys())[0]
+        else:
+            project_id = create_project(u, "My Project", "Default project")
+            flash(f"📁 Created default project: My Project", "info")
+        
+        if not project_id:
+            flash("❌ Failed to create project!", "error")
+            return redirect(url_for("user_dashboard"))
+        
+        project_dir = FILES_ROOT / u / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        
+        files = request.files.getlist("files")
+        uploaded_count = 0
+        extracted_count = 0
+        
+        for f in files:
+            if f and f.filename:
+                name = secure_filename(f.filename)
+                if name:
+                    file_path = project_dir / name
+                    f.save(file_path)
+                    
+                    # Check if it's a zip/tar file
+                    if name.endswith('.zip') or name.endswith('.tar.gz') or name.endswith('.tgz') or name.endswith('.tar'):
+                        try:
+                            if name.endswith('.zip'):
+                                with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                                    zip_ref.extractall(project_dir)
+                            else:
+                                if name.endswith('.tar.gz') or name.endswith('.tgz'):
+                                    with tarfile.open(file_path, 'r:gz') as tar_ref:
+                                        tar_ref.extractall(project_dir)
+                                else:
+                                    with tarfile.open(file_path, 'r') as tar_ref:
+                                        tar_ref.extractall(project_dir)
+                            os.remove(file_path)
+                            extracted_count += 1
+                        except Exception as e:
+                            flash(f"❌ Failed to extract {name}: {str(e)}", "error")
+                    else:
+                        uploaded_count += 1
+        
+        # Auto-deploy the project
+        if uploaded_count > 0 or extracted_count > 0:
+            success, results = deploy_project_files(u, project_id)
+            if success:
+                flash(f"✅ {uploaded_count} files uploaded, {extracted_count} archives extracted, project deployed!", "success")
+            else:
+                flash(f"⚠️ Files uploaded but deployment failed: {results}", "warning")
+        else:
+            flash("⚠️ No files were uploaded.", "warning")
+        
+        # Update project files list
+        update_project_files(u, project_id)
+        
+        # Backup after file upload
+        threading.Thread(target=lambda: manual_backup(f"Files uploaded to project {project_id} by {u}"), daemon=True).start()
+        
+    except Exception as e:
+        app.logger.error(f"Error in upload: {str(e)}")
+        flash(f"Error uploading files: {str(e)}", "error")
     
-    return jsonify({
-        "running": is_project_running(u, project_id),
-        "file": None,
-        "logs": get_project_logs(u, project_id, 200),
-        "install": [],
-        "subscription": "Basic"
-    })
+    return redirect(url_for("user_dashboard"))
 
 # ==================== PROJECT ROUTES ====================
 
 @app.route("/projects")
 @require_user
 def projects_list():
-    u = current_user()
-    projects = get_user_projects(u)
-    for pid, project in projects.items():
-        project["is_running"] = is_project_running(u, pid)
-        resources = get_project_resources(u, pid)
-        project["cpu"] = resources["cpu"]
-        project["ram_mb"] = resources["ram_mb"]
-    return render_template("projects.html", username=u, projects=projects, total_projects=len(projects))
+    try:
+        u = current_user()
+        projects = get_user_projects(u)
+        for pid, project in projects.items():
+            project["is_running"] = is_project_running(u, pid)
+            resources = get_project_resources(u, pid)
+            project["cpu"] = resources["cpu"]
+            project["ram_mb"] = resources["ram_mb"]
+        return render_template("projects.html", username=u, projects=projects, total_projects=len(projects))
+    except Exception as e:
+        app.logger.error(f"Error in projects_list: {str(e)}")
+        flash(f"Error loading projects: {str(e)}", "error")
+        return redirect(url_for("user_dashboard"))
 
 @app.route("/project/create", methods=["GET"])
 @require_user
 def project_create_page():
-    """Show create project page"""
-    u = current_user()
-    users = load_users()
-    is_paid = users.get(u, {}).get("payment_status") == "paid"
-    return render_template("create_project.html", username=u, is_paid=is_paid)
+    try:
+        u = current_user()
+        users = load_users()
+        is_paid = users.get(u, {}).get("payment_status") == "paid"
+        return render_template("create_project.html", username=u, is_paid=is_paid)
+    except Exception as e:
+        app.logger.error(f"Error in project_create_page: {str(e)}")
+        flash(f"Error loading create project page: {str(e)}", "error")
+        return redirect(url_for("user_dashboard"))
 
 @app.route("/project/create", methods=["POST"])
 @require_user
 def project_create():
-    """Create a new project"""
-    u = current_user()
-    users = load_users()
-    if users.get(u, {}).get("payment_status") != "paid":
-        flash("Please subscribe to a plan!", "error")
+    try:
+        u = current_user()
+        users = load_users()
+        if users.get(u, {}).get("payment_status") != "paid":
+            flash("Please subscribe to a plan!", "error")
+            return redirect(url_for("projects_list"))
+        
+        name = request.form.get("name", "").strip()
+        description = request.form.get("description", "").strip()
+        if not name:
+            flash("Project name is required!", "error")
+            return redirect(url_for("projects_list"))
+        
+        project_id = create_project(u, name, description)
+        flash(f"✅ Project '{name}' created!", "success")
+        return redirect(url_for("project_detail", project_id=project_id))
+    except Exception as e:
+        app.logger.error(f"Error in project_create: {str(e)}")
+        flash(f"Error creating project: {str(e)}", "error")
         return redirect(url_for("projects_list"))
-    
-    name = request.form.get("name", "").strip()
-    description = request.form.get("description", "").strip()
-    if not name:
-        flash("Project name is required!", "error")
-        return redirect(url_for("projects_list"))
-    
-    project_id = create_project(u, name, description)
-    flash(f"✅ Project '{name}' created!", "success")
-    return redirect(url_for("project_detail", project_id=project_id))
 
 @app.route("/project/<project_id>")
 @require_user
 def project_detail(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        flash("Project not found!", "error")
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
+        
+        project_dir = FILES_ROOT / u / project_id
+        files = []
+        if project_dir.exists():
+            files = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
+        
+        project["files"] = files
+        project["is_running"] = is_project_running(u, project_id)
+        project["logs"] = get_project_logs(u, project_id, 100)
+        resources = get_project_resources(u, project_id)
+        project["cpu"] = resources["cpu"]
+        project["ram_mb"] = resources["ram_mb"]
+        
+        # Analyze project for more info
+        analysis = deployment_engine.analyze_project(project_dir)
+        project["project_type"] = analysis.get("project_type", "unknown")
+        project["framework"] = analysis.get("framework", "unknown")
+        project["deployment_status"] = project.get("deployment_status", "not_deployed")
+        
+        return render_template("project_detail.html", 
+            username=u, 
+            project=project, 
+            files=files, 
+            analysis=analysis
+        )
+    except Exception as e:
+        app.logger.error(f"Error in project_detail: {str(e)}")
+        flash(f"Error loading project: {str(e)}", "error")
         return redirect(url_for("projects_list"))
-    
-    project_dir = FILES_ROOT / u / project_id
-    files = []
-    if project_dir.exists():
-        files = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
-    
-    project["files"] = files
-    project["is_running"] = is_project_running(u, project_id)
-    project["logs"] = get_project_logs(u, project_id, 100)
-    resources = get_project_resources(u, project_id)
-    project["cpu"] = resources["cpu"]
-    project["ram_mb"] = resources["ram_mb"]
-    
-    # Analyze project for more info
-    analysis = deployment_engine.analyze_project(project_dir)
-    project["project_type"] = analysis.get("project_type", "unknown")
-    project["framework"] = analysis.get("framework", "unknown")
-    project["deployment_status"] = project.get("deployment_status", "not_deployed")
-    
-    return render_template("project_detail.html", username=u, project=project, files=files, analysis=analysis)
 
 @app.route("/project/<project_id>/upload", methods=["POST"])
 @require_user
 def project_upload(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        flash("Project not found!", "error")
-        return redirect(url_for("projects_list"))
-    
-    project_dir = FILES_ROOT / u / project_id
-    files = request.files.getlist("files")
-    uploaded_count = 0
-    extracted_count = 0
-    
-    for file in files:
-        if not file or not file.filename:
-            continue
-        name = secure_filename(file.filename)
-        if not name:
-            continue
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
         
-        # Check if it's a zip/tar file
-        if name.endswith('.zip') or name.endswith('.tar.gz') or name.endswith('.tgz') or name.endswith('.tar'):
-            file_path = project_dir / name
-            file.save(file_path)
+        project_dir = FILES_ROOT / u / project_id
+        files = request.files.getlist("files")
+        uploaded_count = 0
+        extracted_count = 0
+        
+        for file in files:
+            if not file or not file.filename:
+                continue
+            name = secure_filename(file.filename)
+            if not name:
+                continue
             
-            try:
-                if name.endswith('.zip'):
-                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                        zip_ref.extractall(project_dir)
-                else:
-                    if name.endswith('.tar.gz') or name.endswith('.tgz'):
-                        with tarfile.open(file_path, 'r:gz') as tar_ref:
-                            tar_ref.extractall(project_dir)
+            # Check if it's a zip/tar file
+            if name.endswith('.zip') or name.endswith('.tar.gz') or name.endswith('.tgz') or name.endswith('.tar'):
+                file_path = project_dir / name
+                file.save(file_path)
+                
+                try:
+                    if name.endswith('.zip'):
+                        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                            zip_ref.extractall(project_dir)
                     else:
-                        with tarfile.open(file_path, 'r') as tar_ref:
-                            tar_ref.extractall(project_dir)
-                os.remove(file_path)
-                extracted_count += 1
-                flash(f"📦 Extracted {name}!", "success")
-            except Exception as e:
-                flash(f"❌ Failed to extract {name}: {str(e)}", "error")
-        else:
-            file.save(project_dir / name)
-            uploaded_count += 1
-            flash(f"📄 Uploaded {name}", "success")
-    
-    # Auto-deploy after upload
-    if uploaded_count > 0 or extracted_count > 0:
-        success, results = deploy_project_files(u, project_id)
-        if success:
-            flash(f"🚀 Project auto-deployed! ({', '.join(results[:2])})", "success")
-    
-    # Update project files list
-    projects = load_projects()
-    if u in projects and project_id in projects[u]:
-        projects[u][project_id]["files"] = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
-        projects[u][project_id]["updated_at"] = time.time()
-        save_projects(projects)
-    
-    return redirect(url_for("project_detail", project_id=project_id))
-
-@app.route("/project/<project_id>/file/delete/<filename>", methods=["POST"])
-@require_user
-def project_file_delete(project_id, filename):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        flash("Project not found!", "error")
-        return redirect(url_for("projects_list"))
-    
-    project_dir = FILES_ROOT / u / project_id
-    filepath = project_dir / filename
-    if filepath.exists() and filepath.is_file():
-        filepath.unlink()
-        flash(f"File '{filename}' deleted!", "success")
+                        if name.endswith('.tar.gz') or name.endswith('.tgz'):
+                            with tarfile.open(file_path, 'r:gz') as tar_ref:
+                                tar_ref.extractall(project_dir)
+                        else:
+                            with tarfile.open(file_path, 'r') as tar_ref:
+                                tar_ref.extractall(project_dir)
+                    os.remove(file_path)
+                    extracted_count += 1
+                    flash(f"📦 Extracted {name}!", "success")
+                except Exception as e:
+                    flash(f"❌ Failed to extract {name}: {str(e)}", "error")
+            else:
+                file.save(project_dir / name)
+                uploaded_count += 1
+                flash(f"📄 Uploaded {name}", "success")
         
-        projects = load_projects()
-        if u in projects and project_id in projects[u]:
-            projects[u][project_id]["files"] = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
-            save_projects(projects)
-    else:
-        flash("File not found!", "error")
+        # Auto-deploy after upload
+        if uploaded_count > 0 or extracted_count > 0:
+            success, results = deploy_project_files(u, project_id)
+            if success:
+                flash(f"🚀 Project auto-deployed! ({', '.join(results[:2])})", "success")
+        
+        # Update project files list
+        update_project_files(u, project_id)
+        
+    except Exception as e:
+        app.logger.error(f"Error in project_upload: {str(e)}")
+        flash(f"Error uploading files: {str(e)}", "error")
+    
     return redirect(url_for("project_detail", project_id=project_id))
 
 @app.route("/project/<project_id>/save-run-command", methods=["POST"])
 @require_user
 def project_save_run_command(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        flash("Project not found!", "error")
-        return redirect(url_for("projects_list"))
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
+        
+        run_command = request.form.get("run_command", "").strip()
+        if not run_command:
+            flash("Run command is required!", "error")
+            return redirect(url_for("project_detail", project_id=project_id))
+        
+        projects = load_projects()
+        if u in projects and project_id in projects[u]:
+            projects[u][project_id]["run_command"] = run_command
+            projects[u][project_id]["updated_at"] = time.time()
+            save_projects(projects)
+            flash("Run command saved!", "success")
+    except Exception as e:
+        app.logger.error(f"Error in project_save_run_command: {str(e)}")
+        flash(f"Error saving run command: {str(e)}", "error")
     
-    run_command = request.form.get("run_command", "").strip()
-    if not run_command:
-        flash("Run command is required!", "error")
-        return redirect(url_for("project_detail", project_id=project_id))
-    
-    projects = load_projects()
-    if u in projects and project_id in projects[u]:
-        projects[u][project_id]["run_command"] = run_command
-        projects[u][project_id]["updated_at"] = time.time()
-        save_projects(projects)
-        flash("Run command saved!", "success")
     return redirect(url_for("project_detail", project_id=project_id))
 
 @app.route("/project/<project_id>/toggle-restart", methods=["POST"])
 @require_user
 def project_toggle_restart(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        flash("Project not found!", "error")
-        return redirect(url_for("projects_list"))
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
+        
+        projects = load_projects()
+        if u in projects and project_id in projects[u]:
+            current = projects[u][project_id].get("restart_on_crash", False)
+            projects[u][project_id]["restart_on_crash"] = not current
+            projects[u][project_id]["crash_count"] = 0
+            save_projects(projects)
+            flash(f"🔄 Auto-restart {'enabled' if not current else 'disabled'}", "success")
+    except Exception as e:
+        app.logger.error(f"Error in project_toggle_restart: {str(e)}")
+        flash(f"Error toggling auto-restart: {str(e)}", "error")
     
-    projects = load_projects()
-    if u in projects and project_id in projects[u]:
-        current = projects[u][project_id].get("restart_on_crash", False)
-        projects[u][project_id]["restart_on_crash"] = not current
-        projects[u][project_id]["crash_count"] = 0
-        save_projects(projects)
-        flash(f"🔄 Auto-restart {'enabled' if not current else 'disabled'}", "success")
     return redirect(url_for("project_detail", project_id=project_id))
 
 @app.route("/project/<project_id>/restart", methods=["POST"])
 @require_user
 def project_restart(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    
-    stop_project_process(u, project_id)
-    time.sleep(1)
-    success, msg = start_project_process(u, project_id)
-    
-    if success:
-        threading.Thread(target=lambda: manual_backup(f"Project restarted: {project['name']}"), daemon=True).start()
-        return jsonify({"success": True, "message": msg})
-    return jsonify({"success": False, "error": msg}), 400
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            return jsonify({"success": False, "error": "Project not found"}), 404
+        
+        stop_project_process(u, project_id)
+        time.sleep(1)
+        success, msg = start_project_process(u, project_id)
+        
+        if success:
+            threading.Thread(target=lambda: manual_backup(f"Project restarted: {project['name']}"), daemon=True).start()
+            return jsonify({"success": True, "message": msg})
+        return jsonify({"success": False, "error": msg}), 400
+    except Exception as e:
+        app.logger.error(f"Error in project_restart: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/project/<project_id>/start", methods=["POST"])
 @require_user
 def project_start(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    
-    if is_project_running(u, project_id):
-        return jsonify({"success": False, "error": "Project is already running"}), 400
-    
-    success, msg = start_project_process(u, project_id)
-    if success:
-        threading.Thread(target=lambda: manual_backup(f"Project started: {project['name']}"), daemon=True).start()
-        return jsonify({"success": True, "message": msg, "port": project.get("port")})
-    return jsonify({"success": False, "error": msg}), 400
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            return jsonify({"success": False, "error": "Project not found"}), 404
+        
+        if is_project_running(u, project_id):
+            return jsonify({"success": False, "error": "Project is already running"}), 400
+        
+        success, msg = start_project_process(u, project_id)
+        if success:
+            threading.Thread(target=lambda: manual_backup(f"Project started: {project['name']}"), daemon=True).start()
+            return jsonify({"success": True, "message": msg, "port": project.get("port")})
+        return jsonify({"success": False, "error": msg}), 400
+    except Exception as e:
+        app.logger.error(f"Error in project_start: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/project/<project_id>/stop", methods=["POST"])
 @require_user
 def project_stop(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    
-    if not is_project_running(u, project_id):
-        return jsonify({"success": True, "message": "Project is already stopped"})
-    
-    stop_project_process(u, project_id)
-    return jsonify({"success": True, "message": "Project stopped"})
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            return jsonify({"success": False, "error": "Project not found"}), 404
+        
+        if not is_project_running(u, project_id):
+            return jsonify({"success": True, "message": "Project is already stopped"})
+        
+        stop_project_process(u, project_id)
+        return jsonify({"success": True, "message": "Project stopped"})
+    except Exception as e:
+        app.logger.error(f"Error in project_stop: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/project/<project_id>/env-vars")
 @require_user
 def project_env_vars(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    return jsonify({"env_vars": project.get("env_vars", {})})
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            return jsonify({"success": False, "error": "Project not found"}), 404
+        return jsonify({"env_vars": project.get("env_vars", {})})
+    except Exception as e:
+        app.logger.error(f"Error in project_env_vars: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/project/<project_id>/save-env-vars", methods=["POST"])
 @require_user
 def project_save_env_vars(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    
-    env_vars = request.json.get("env_vars", {})
-    projects = load_projects()
-    if u in projects and project_id in projects[u]:
-        projects[u][project_id]["env_vars"] = env_vars
-        save_projects(projects)
-        return jsonify({"success": True})
-    return jsonify({"success": False, "error": "Failed to save"}), 500
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            return jsonify({"success": False, "error": "Project not found"}), 404
+        
+        env_vars = request.json.get("env_vars", {})
+        projects = load_projects()
+        if u in projects and project_id in projects[u]:
+            projects[u][project_id]["env_vars"] = env_vars
+            save_projects(projects)
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": "Failed to save"}), 500
+    except Exception as e:
+        app.logger.error(f"Error in project_save_env_vars: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/project/<project_id>/logs")
 @require_user
 def project_logs(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    
-    limit = request.args.get("limit", 500, type=int)
-    logs = get_project_logs(u, project_id, limit)
-    return jsonify({
-        "success": True,
-        "logs": logs,
-        "is_running": is_project_running(u, project_id),
-        "total": len(logs)
-    })
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            return jsonify({"success": False, "error": "Project not found"}), 404
+        
+        limit = request.args.get("limit", 500, type=int)
+        logs = get_project_logs(u, project_id, limit)
+        return jsonify({
+            "success": True,
+            "logs": logs,
+            "is_running": is_project_running(u, project_id),
+            "total": len(logs)
+        })
+    except Exception as e:
+        app.logger.error(f"Error in project_logs: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/project/<project_id>/logs/download")
 @require_user
 def project_logs_download(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        flash("Project not found!", "error")
-        return redirect(url_for("projects_list"))
-    
-    logs = get_project_logs(u, project_id, 5000)
-    log_text = "\n".join(logs) if logs else "No logs available."
-    
-    response = Response(log_text, mimetype="text/plain")
-    response.headers["Content-Disposition"] = f"attachment; filename={project['name']}_logs_{datetime.now().strftime('%Y%m%d')}.txt"
-    return response
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
+        
+        logs = get_project_logs(u, project_id, 5000)
+        log_text = "\n".join(logs) if logs else "No logs available."
+        
+        response = Response(log_text, mimetype="text/plain")
+        response.headers["Content-Disposition"] = f"attachment; filename={project['name']}_logs_{datetime.now().strftime('%Y%m%d')}.txt"
+        return response
+    except Exception as e:
+        app.logger.error(f"Error in project_logs_download: {str(e)}")
+        flash(f"Error downloading logs: {str(e)}", "error")
+        return redirect(url_for("project_detail", project_id=project_id))
 
 @app.route("/project/<project_id>/resources")
 @require_user
 def project_resources(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    
-    resources = get_project_resources(u, project_id)
-    return jsonify({
-        "success": True,
-        "cpu": resources["cpu"],
-        "ram": resources["ram"],
-        "ram_mb": resources["ram_mb"],
-        "is_running": is_project_running(u, project_id)
-    })
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            return jsonify({"success": False, "error": "Project not found"}), 404
+        
+        resources = get_project_resources(u, project_id)
+        return jsonify({
+            "success": True,
+            "cpu": resources["cpu"],
+            "ram": resources["ram"],
+            "ram_mb": resources["ram_mb"],
+            "is_running": is_project_running(u, project_id)
+        })
+    except Exception as e:
+        app.logger.error(f"Error in project_resources: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/project/<project_id>/custom-domain", methods=["POST"])
 @require_user
 def project_custom_domain(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        flash("Project not found!", "error")
-        return redirect(url_for("projects_list"))
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
+        
+        domain = request.form.get("domain", "").strip()
+        projects = load_projects()
+        if u in projects and project_id in projects[u]:
+            projects[u][project_id]["custom_domain"] = domain
+            save_projects(projects)
+            flash(f"Custom domain set to {domain}", "success")
+    except Exception as e:
+        app.logger.error(f"Error in project_custom_domain: {str(e)}")
+        flash(f"Error setting custom domain: {str(e)}", "error")
     
-    domain = request.form.get("domain", "").strip()
-    projects = load_projects()
-    if u in projects and project_id in projects[u]:
-        projects[u][project_id]["custom_domain"] = domain
-        save_projects(projects)
-        flash(f"Custom domain set to {domain}", "success")
     return redirect(url_for("project_detail", project_id=project_id))
 
 @app.route("/project/<project_id>/delete", methods=["POST"])
 @require_user
 def project_delete(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        flash("Project not found!", "error")
-        return redirect(url_for("projects_list"))
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
+        
+        if delete_project(u, project_id):
+            flash(f"Project '{project['name']}' deleted!", "success")
+        else:
+            flash("Failed to delete project!", "error")
+    except Exception as e:
+        app.logger.error(f"Error in project_delete: {str(e)}")
+        flash(f"Error deleting project: {str(e)}", "error")
     
-    if delete_project(u, project_id):
-        flash(f"Project '{project['name']}' deleted!", "success")
-    else:
-        flash("Failed to delete project!", "error")
     return redirect(url_for("projects_list"))
 
 @app.route("/project/<project_id>/deploy", methods=["POST"])
 @require_user
 def project_deploy(project_id):
-    u = current_user()
-    project = get_project(u, project_id)
-    if not project:
-        return jsonify({"success": False, "error": "Project not found"}), 404
-    
-    success, results = deploy_project_files(u, project_id)
-    if success:
-        return jsonify({"success": True, "message": "Project deployed successfully", "logs": results})
-    return jsonify({"success": False, "error": results}), 400
+    try:
+        u = current_user()
+        project = get_project(u, project_id)
+        if not project:
+            return jsonify({"success": False, "error": "Project not found"}), 404
+        
+        success, results = deploy_project_files(u, project_id)
+        if success:
+            return jsonify({"success": True, "message": "Project deployed successfully", "logs": results})
+        return jsonify({"success": False, "error": results}), 400
+    except Exception as e:
+        app.logger.error(f"Error in project_deploy: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ==================== OWNER ROUTES ====================
 
 @app.route("/owner")
 @require_owner
 def owner_dashboard():
-    users = load_users()
-    projects = load_projects()
-    total_projects = sum(len(p) for p in projects.values()) if projects else 0
-    backup_info = get_backup_status()
-    
-    return render_template("owner.html",
-        users=users,
-        base_url=request.host_url.rstrip("/"),
-        pricing=load_pricing(),
-        currencies=SUPPORTED_CURRENCIES,
-        backup_info=backup_info,
-        total_projects=total_projects
-    )
+    try:
+        users = load_users()
+        projects = load_projects()
+        total_projects = sum(len(p) for p in projects.values()) if projects else 0
+        backup_info = get_backup_status()
+        
+        return render_template("owner.html",
+            users=users,
+            base_url=request.host_url.rstrip("/"),
+            pricing=load_pricing(),
+            currencies=SUPPORTED_CURRENCIES,
+            backup_info=backup_info,
+            total_projects=total_projects
+        )
+    except Exception as e:
+        app.logger.error(f"Error in owner_dashboard: {str(e)}")
+        flash(f"Error loading owner dashboard: {str(e)}", "error")
+        return redirect(url_for("landing"))
 
 @app.route("/owner/create", methods=["POST"])
 @require_owner
 def owner_create():
-    u = request.form.get("username", "").strip()
-    p = request.form.get("password", "").strip()
-    subscription = request.form.get("subscription", "Basic")
-    email = request.form.get("email", "").strip()
+    try:
+        u = request.form.get("username", "").strip()
+        p = request.form.get("password", "").strip()
+        subscription = request.form.get("subscription", "Basic")
+        email = request.form.get("email", "").strip()
+        
+        if not u or not p:
+            flash("Username and password are required!", "error")
+            return redirect(url_for("owner_dashboard"))
+        if u == OWNER_USER:
+            flash("Cannot create owner account!", "error")
+            return redirect(url_for("owner_dashboard"))
+        
+        users = load_users()
+        if u in users:
+            flash("User already exists!", "error")
+            return redirect(url_for("owner_dashboard"))
+        
+        users[u] = {
+            "password": generate_password_hash(p),
+            "created_at": time.time(),
+            "subscription": subscription,
+            "token": secrets.token_urlsafe(16),
+            "payment_status": "paid",
+            "email": email,
+            "banned": False,
+        }
+        save_users(users)
+        user_dir(u)
+        flash(f"User {u} created!", "success")
+    except Exception as e:
+        app.logger.error(f"Error in owner_create: {str(e)}")
+        flash(f"Error creating user: {str(e)}", "error")
     
-    if not u or not p:
-        return redirect(url_for("owner_dashboard"))
-    if u == OWNER_USER:
-        return redirect(url_for("owner_dashboard"))
-    
-    users = load_users()
-    if u in users:
-        flash("User already exists!", "error")
-        return redirect(url_for("owner_dashboard"))
-    
-    users[u] = {
-        "password": generate_password_hash(p),
-        "created_at": time.time(),
-        "subscription": subscription,
-        "token": secrets.token_urlsafe(16),
-        "payment_status": "paid",
-        "email": email,
-        "banned": False,
-    }
-    save_users(users)
-    user_dir(u)
-    flash(f"User {u} created!", "success")
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/owner/delete/<username>", methods=["POST"])
 @require_owner
 def owner_delete(username):
-    users = load_users()
-    if username in users and username != OWNER_USER:
-        del users[username]
-        save_users(users)
-        shutil.rmtree(FILES_ROOT / username, ignore_errors=True)
-        flash(f"User {username} deleted!", "success")
+    try:
+        users = load_users()
+        if username in users and username != OWNER_USER:
+            del users[username]
+            save_users(users)
+            shutil.rmtree(FILES_ROOT / username, ignore_errors=True)
+            flash(f"User {username} deleted!", "success")
+        else:
+            flash("Cannot delete owner or user not found!", "error")
+    except Exception as e:
+        app.logger.error(f"Error in owner_delete: {str(e)}")
+        flash(f"Error deleting user: {str(e)}", "error")
+    
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/owner/ban/<username>", methods=["POST"])
 @require_owner
 def owner_ban_user(username):
-    users = load_users()
-    if username in users and username != OWNER_USER:
-        users[username]["banned"] = True
-        save_users(users)
-        flash(f"User {username} banned!", "success")
+    try:
+        users = load_users()
+        if username in users and username != OWNER_USER:
+            users[username]["banned"] = True
+            save_users(users)
+            flash(f"User {username} banned!", "success")
+        else:
+            flash("Cannot ban owner or user not found!", "error")
+    except Exception as e:
+        app.logger.error(f"Error in owner_ban_user: {str(e)}")
+        flash(f"Error banning user: {str(e)}", "error")
+    
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/owner/unban/<username>", methods=["POST"])
 @require_owner
 def owner_unban_user(username):
-    users = load_users()
-    if username in users:
-        users[username]["banned"] = False
-        save_users(users)
-        flash(f"User {username} unbanned!", "success")
+    try:
+        users = load_users()
+        if username in users:
+            users[username]["banned"] = False
+            save_users(users)
+            flash(f"User {username} unbanned!", "success")
+        else:
+            flash("User not found!", "error")
+    except Exception as e:
+        app.logger.error(f"Error in owner_unban_user: {str(e)}")
+        flash(f"Error unbanning user: {str(e)}", "error")
+    
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/owner/unban-all", methods=["POST"])
 @require_owner
 def owner_unban_all():
-    users = load_users()
-    for username in users:
-        if username != OWNER_USER:
-            users[username]["banned"] = False
-    save_users(users)
-    flash("All users unbanned!", "success")
+    try:
+        users = load_users()
+        count = 0
+        for username in users:
+            if username != OWNER_USER:
+                users[username]["banned"] = False
+                count += 1
+        save_users(users)
+        flash(f"{count} users unbanned!", "success")
+    except Exception as e:
+        app.logger.error(f"Error in owner_unban_all: {str(e)}")
+        flash(f"Error unbanning users: {str(e)}", "error")
+    
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/owner/ban-all", methods=["POST"])
 @require_owner
 def owner_ban_all():
-    users = load_users()
-    count = 0
-    for username in users:
-        if username != OWNER_USER:
-            users[username]["banned"] = True
-            count += 1
-    save_users(users)
-    flash(f"{count} users banned!", "success")
+    try:
+        users = load_users()
+        count = 0
+        for username in users:
+            if username != OWNER_USER:
+                users[username]["banned"] = True
+                count += 1
+        save_users(users)
+        flash(f"{count} users banned!", "success")
+    except Exception as e:
+        app.logger.error(f"Error in owner_ban_all: {str(e)}")
+        flash(f"Error banning users: {str(e)}", "error")
+    
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/owner/pricing", methods=["POST"])
 @require_owner
 def owner_pricing():
-    pricing = load_pricing()
-    pricing["currency"] = request.form.get("currency", "NGN")
-    pricing["contact"] = request.form.get("contact", "")
+    try:
+        pricing = load_pricing()
+        pricing["currency"] = request.form.get("currency", "NGN")
+        pricing["contact"] = request.form.get("contact", "")
+        
+        plans = []
+        names = request.form.getlist("p_name")
+        durs = request.form.getlist("p_duration")
+        prices = request.form.getlist("p_price")
+        feats = request.form.getlist("p_features")
+        
+        for i in range(len(names)):
+            if names[i].strip():
+                plans.append({
+                    "name": names[i].strip(),
+                    "duration": durs[i].strip() if i < len(durs) else "",
+                    "price": prices[i].strip() if i < len(prices) else "0",
+                    "features": feats[i].strip() if i < len(feats) else "",
+                })
+        pricing["plans"] = plans
+        save_pricing(pricing)
+        flash("Pricing updated!", "success")
+    except Exception as e:
+        app.logger.error(f"Error in owner_pricing: {str(e)}")
+        flash(f"Error updating pricing: {str(e)}", "error")
     
-    plans = []
-    names = request.form.getlist("p_name")
-    durs = request.form.getlist("p_duration")
-    prices = request.form.getlist("p_price")
-    feats = request.form.getlist("p_features")
-    
-    for i in range(len(names)):
-        if names[i].strip():
-            plans.append({
-                "name": names[i].strip(),
-                "duration": durs[i].strip() if i < len(durs) else "",
-                "price": prices[i].strip() if i < len(prices) else "0",
-                "features": feats[i].strip() if i < len(feats) else "",
-            })
-    pricing["plans"] = plans
-    save_pricing(pricing)
-    flash("Pricing updated!", "success")
     return redirect(url_for("owner_dashboard") + "#pricing")
 
 @app.route("/owner/update_subscription/<username>", methods=["POST"])
 @require_owner
 def owner_update_subscription(username):
-    subscription = request.form.get("subscription", "Basic")
-    users = load_users()
-    if username in users:
-        users[username]["subscription"] = subscription
-        users[username]["payment_status"] = "paid"
-        save_users(users)
-        flash(f"✅ Subscription updated for {username}!", "success")
-    else:
-        flash(f"❌ User {username} not found!", "error")
+    try:
+        subscription = request.form.get("subscription", "Basic")
+        users = load_users()
+        if username in users:
+            users[username]["subscription"] = subscription
+            users[username]["payment_status"] = "paid"
+            save_users(users)
+            flash(f"✅ Subscription updated for {username}!", "success")
+        else:
+            flash(f"❌ User {username} not found!", "error")
+    except Exception as e:
+        app.logger.error(f"Error in owner_update_subscription: {str(e)}")
+        flash(f"Error updating subscription: {str(e)}", "error")
+    
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/admin/backup", methods=["POST"])
 @require_owner
 def admin_backup():
-    def do_backup():
-        if manual_backup("Manual backup"):
-            flash("✅ Backup completed!", "success")
-        else:
-            flash("⚠️ Backup failed!", "warning")
-    threading.Thread(target=do_backup, daemon=True).start()
-    flash("📤 Backup started!", "info")
+    try:
+        def do_backup():
+            if manual_backup("Manual backup"):
+                flash("✅ Backup completed!", "success")
+            else:
+                flash("⚠️ Backup failed!", "warning")
+        threading.Thread(target=do_backup, daemon=True).start()
+        flash("📤 Backup started!", "info")
+    except Exception as e:
+        app.logger.error(f"Error in admin_backup: {str(e)}")
+        flash(f"Error starting backup: {str(e)}", "error")
+    
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/admin/backup-status")
 @require_owner
 def admin_backup_status():
-    return jsonify(get_backup_status())
+    try:
+        return jsonify(get_backup_status())
+    except Exception as e:
+        app.logger.error(f"Error in admin_backup_status: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/admin/restore", methods=["POST"])
 @require_owner
 def admin_restore():
-    if github_backup.restore():
-        flash("✅ Restore successful!", "success")
-    else:
-        flash("❌ Restore failed!", "error")
+    try:
+        if github_backup.restore():
+            flash("✅ Restore successful!", "success")
+        else:
+            flash("❌ Restore failed!", "error")
+    except Exception as e:
+        app.logger.error(f"Error in admin_restore: {str(e)}")
+        flash(f"Error restoring backup: {str(e)}", "error")
+    
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/admin/block-ip", methods=["POST"])
 @require_owner
 def admin_block_ip():
-    ip = request.form.get("ip", "").strip()
-    reason = request.form.get("reason", "Manual block")
-    flash(f"IP {ip} blocked: {reason}", "success")
+    try:
+        ip = request.form.get("ip", "").strip()
+        reason = request.form.get("reason", "Manual block")
+        flash(f"IP {ip} blocked: {reason}", "success")
+    except Exception as e:
+        app.logger.error(f"Error in admin_block_ip: {str(e)}")
+        flash(f"Error blocking IP: {str(e)}", "error")
+    
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/admin/unblock-all-ips", methods=["POST"])
 @require_owner
 def admin_unblock_all_ips():
-    flash("All IPs unblocked", "success")
+    try:
+        flash("All IPs unblocked", "success")
+    except Exception as e:
+        app.logger.error(f"Error in admin_unblock_all_ips: {str(e)}")
+        flash(f"Error unblocking IPs: {str(e)}", "error")
+    
     return redirect(url_for("owner_dashboard"))
 
 @app.route("/admin/blocked-ips")
 @require_owner
 def admin_blocked_ips():
-    return jsonify({"blocked_ips": []})
+    try:
+        return jsonify({"blocked_ips": []})
+    except Exception as e:
+        app.logger.error(f"Error in admin_blocked_ips: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ==================== ERROR HANDLING ====================
+
+@app.errorhandler(404)
+def not_found_error(error):
+    if request.is_json:
+        return jsonify({"error": "Resource not found"}), 404
+    flash("Page not found!", "error")
+    return redirect(url_for("landing"))
+
+@app.errorhandler(500)
+def internal_error(error):
+    app.logger.error(f"Internal Server Error: {error}")
+    if request.is_json:
+        return jsonify({"error": "Internal server error"}), 500
+    flash("An internal error occurred. Please try again.", "error")
+    return redirect(url_for("landing"))
+
+@app.errorhandler(413)
+def too_large_error(error):
+    if request.is_json:
+        return jsonify({"error": "File too large. Maximum size is 500MB"}), 413
+    flash("File too large! Maximum size is 500MB.", "error")
+    return redirect(request.referrer or url_for("landing"))
+
+@app.errorhandler(403)
+def forbidden_error(error):
+    if request.is_json:
+        return jsonify({"error": "Access forbidden"}), 403
+    flash("You don't have permission to access this resource.", "error")
+    return redirect(url_for("landing"))
+
+@app.errorhandler(401)
+def unauthorized_error(error):
+    if request.is_json:
+        return jsonify({"error": "Authentication required"}), 401
+    flash("Please login to access this resource.", "error")
+    return redirect(url_for("login"))
+
+# ==================== REQUEST LOGGING MIDDLEWARE ====================
+
+@app.before_request
+def log_request():
+    if not request.path.startswith('/static'):
+        app.logger.info(f"{request.method} {request.path} from {request.remote_addr}")
+
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    return response
 
 @app.route("/healthz")
 def health():
