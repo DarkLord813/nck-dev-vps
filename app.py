@@ -86,6 +86,269 @@ file_handler.setLevel(logging.INFO)
 app.logger.addHandler(file_handler)
 app.logger.setLevel(logging.INFO)
 
+# ==================== GITHUB STORAGE SYSTEM ====================
+class GitHubStorage:
+    """Store and retrieve files from GitHub"""
+    
+    def __init__(self):
+        self.token = os.environ.get("GITHUB_TOKEN", "")
+        self.repo_owner = "DarkLord813"
+        self.repo_name = os.environ.get("GITHUB_REPO_NAME", "")
+        self.branch = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
+        self.is_enabled = bool(self.token and self.repo_owner and self.repo_name)
+        self._session = requests.Session()
+        self._cache = {}
+        self._cache_time = {}
+        self._cache_duration = 30  # seconds
+    
+    @property
+    def _headers(self):
+        return {
+            'Authorization': f'token {self.token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+    
+    def _get_file_path(self, username, project_id, filename):
+        """Get GitHub path for a file"""
+        return f"user_files/{username}/{project_id}/{filename}"
+    
+    def _get_api_url(self, path):
+        """Get GitHub API URL for a file"""
+        return f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{path}"
+    
+    def save_file(self, username, project_id, filename, content, is_binary=False):
+        """Save a file to GitHub"""
+        if not self.is_enabled:
+            # Fallback to local storage
+            project_dir = FILES_ROOT / username / project_id
+            project_dir.mkdir(parents=True, exist_ok=True)
+            filepath = project_dir / filename
+            if is_binary:
+                with open(filepath, 'wb') as f:
+                    f.write(content)
+            else:
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(content)
+            return True
+        
+        try:
+            path = self._get_file_path(username, project_id, filename)
+            api_url = self._get_api_url(path)
+            
+            # Encode content
+            if is_binary:
+                encoded = base64.b64encode(content).decode()
+            else:
+                encoded = base64.b64encode(content.encode('utf-8')).decode()
+            
+            # Check if file exists
+            r = self._session.get(api_url, headers=self._headers)
+            file_sha = r.json().get('sha') if r.status_code == 200 else None
+            
+            payload = {
+                'message': f"Save file: {filename} for {username}/{project_id}",
+                'content': encoded,
+                'branch': self.branch
+            }
+            if file_sha:
+                payload['sha'] = file_sha
+            
+            r = self._session.put(api_url, headers=self._headers, json=payload, timeout=60)
+            
+            if r.status_code in (200, 201):
+                # Clear cache
+                cache_key = f"{username}:{project_id}:{filename}"
+                self._cache.pop(cache_key, None)
+                self._cache_time.pop(cache_key, None)
+                return True
+            else:
+                app.logger.error(f"GitHub save error: {r.status_code} - {r.text}")
+                # Fallback to local
+                project_dir = FILES_ROOT / username / project_id
+                project_dir.mkdir(parents=True, exist_ok=True)
+                filepath = project_dir / filename
+                if is_binary:
+                    with open(filepath, 'wb') as f:
+                        f.write(content)
+                else:
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                return True
+                
+        except Exception as e:
+            app.logger.error(f"GitHub save exception: {e}")
+            # Fallback to local
+            project_dir = FILES_ROOT / username / project_id
+            project_dir.mkdir(parents=True, exist_ok=True)
+            filepath = project_dir / filename
+            if is_binary:
+                with open(filepath, 'wb') as f:
+                    f.write(content)
+            else:
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(content)
+            return True
+    
+    def get_file(self, username, project_id, filename):
+        """Get a file from GitHub"""
+        # Check cache first
+        cache_key = f"{username}:{project_id}:{filename}"
+        if cache_key in self._cache:
+            cache_time = self._cache_time.get(cache_key, 0)
+            if time.time() - cache_time < self._cache_duration:
+                return self._cache[cache_key]
+        
+        # Check local first
+        project_dir = FILES_ROOT / username / project_id
+        filepath = project_dir / filename
+        if filepath.exists():
+            try:
+                content = filepath.read_bytes()
+                self._cache[cache_key] = content
+                self._cache_time[cache_key] = time.time()
+                return content
+            except:
+                pass
+        
+        # Try GitHub
+        if self.is_enabled:
+            try:
+                path = self._get_file_path(username, project_id, filename)
+                api_url = self._get_api_url(path)
+                
+                r = self._session.get(api_url, headers=self._headers, timeout=30)
+                
+                if r.status_code == 200:
+                    data = r.json()
+                    content = base64.b64decode(data.get('content', ''))
+                    # Cache it
+                    self._cache[cache_key] = content
+                    self._cache_time[cache_key] = time.time()
+                    return content
+                elif r.status_code == 404:
+                    return None
+                else:
+                    app.logger.error(f"GitHub get error: {r.status_code}")
+                    return None
+            except Exception as e:
+                app.logger.error(f"GitHub get exception: {e}")
+                return None
+        
+        return None
+    
+    def delete_file(self, username, project_id, filename):
+        """Delete a file from GitHub"""
+        if not self.is_enabled:
+            project_dir = FILES_ROOT / username / project_id
+            filepath = project_dir / filename
+            if filepath.exists():
+                filepath.unlink()
+            return True
+        
+        try:
+            path = self._get_file_path(username, project_id, filename)
+            api_url = self._get_api_url(path)
+            
+            # Get file SHA first
+            r = self._session.get(api_url, headers=self._headers)
+            if r.status_code == 404:
+                # File doesn't exist
+                return True
+            if r.status_code != 200:
+                return False
+            
+            file_sha = r.json().get('sha')
+            if not file_sha:
+                return False
+            
+            payload = {
+                'message': f"Delete file: {filename} for {username}/{project_id}",
+                'sha': file_sha,
+                'branch': self.branch
+            }
+            
+            r = self._session.delete(api_url, headers=self._headers, json=payload, timeout=30)
+            
+            if r.status_code in (200, 204):
+                # Clear cache
+                cache_key = f"{username}:{project_id}:{filename}"
+                self._cache.pop(cache_key, None)
+                self._cache_time.pop(cache_key, None)
+                return True
+            else:
+                # Fallback to local delete
+                project_dir = FILES_ROOT / username / project_id
+                filepath = project_dir / filename
+                if filepath.exists():
+                    filepath.unlink()
+                return True
+                
+        except Exception as e:
+            app.logger.error(f"GitHub delete exception: {e}")
+            # Fallback to local delete
+            project_dir = FILES_ROOT / username / project_id
+            filepath = project_dir / filename
+            if filepath.exists():
+                filepath.unlink()
+            return True
+    
+    def list_files(self, username, project_id):
+        """List all files for a project"""
+        files = []
+        
+        # Check local first
+        project_dir = FILES_ROOT / username / project_id
+        if project_dir.exists():
+            for item in project_dir.iterdir():
+                if item.is_file():
+                    files.append(item.name)
+        
+        # If GitHub is enabled, also check there
+        if self.is_enabled:
+            try:
+                path = f"user_files/{username}/{project_id}"
+                api_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{path}"
+                
+                r = self._session.get(api_url, headers=self._headers, timeout=30)
+                if r.status_code == 200:
+                    data = r.json()
+                    for item in data:
+                        if item.get('type') == 'file':
+                            files.append(item.get('name'))
+                elif r.status_code != 404:
+                    app.logger.error(f"GitHub list error: {r.status_code}")
+            except Exception as e:
+                app.logger.error(f"GitHub list exception: {e}")
+        
+        # Remove duplicates and sort
+        return sorted(list(set(files)))
+    
+    def file_exists(self, username, project_id, filename):
+        """Check if a file exists"""
+        # Check cache
+        cache_key = f"{username}:{project_id}:{filename}"
+        if cache_key in self._cache:
+            return True
+        
+        # Check local
+        project_dir = FILES_ROOT / username / project_id
+        if (project_dir / filename).exists():
+            return True
+        
+        # Check GitHub
+        if self.is_enabled:
+            try:
+                path = self._get_file_path(username, project_id, filename)
+                api_url = self._get_api_url(path)
+                r = self._session.get(api_url, headers=self._headers, timeout=30)
+                return r.status_code == 200
+            except:
+                pass
+        
+        return False
+
+github_storage = GitHubStorage()
+
 # ==================== GITHUB BACKUP SYSTEM ====================
 class GitHubBackupSystem:
     def __init__(self, data_dir, files_root):
@@ -378,6 +641,7 @@ class ProjectDeploymentEngine:
     
     @staticmethod
     def install_dependencies(project_dir, project_type):
+        """Install dependencies based on project type"""
         project_dir = Path(project_dir)
         results = []
         
@@ -555,12 +819,12 @@ def update_project_files(username, project_id):
     try:
         projects = load_projects()
         if username in projects and project_id in projects[username]:
-            project_dir = FILES_ROOT / username / project_id
-            if project_dir.exists():
-                projects[username][project_id]["files"] = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
-                projects[username][project_id]["updated_at"] = time.time()
-                save_projects(projects)
-                return True
+            # Get files from GitHub storage
+            files = github_storage.list_files(username, project_id)
+            projects[username][project_id]["files"] = files
+            projects[username][project_id]["updated_at"] = time.time()
+            save_projects(projects)
+            return True
     except Exception as e:
         app.logger.error(f"Error updating project files: {str(e)}")
     return False
@@ -653,9 +917,6 @@ def create_project(username, project_name, description=""):
     }
     save_projects(projects)
     
-    project_dir = FILES_ROOT / username / project_id
-    project_dir.mkdir(parents=True, exist_ok=True)
-    
     threading.Thread(target=lambda: manual_backup(f"Project created: {project_name} by {username}"), daemon=True).start()
     
     return project_id
@@ -665,9 +926,17 @@ def delete_project(username, project_id):
     if username in projects and project_id in projects[username]:
         stop_project_process(username, project_id)
         port_manager.release_port(username, project_id)
+        
+        # Delete all files from GitHub
+        project = projects[username][project_id]
+        for filename in project.get("files", []):
+            github_storage.delete_file(username, project_id, filename)
+        
+        # Delete local files
         project_dir = FILES_ROOT / username / project_id
         if project_dir.exists():
             shutil.rmtree(project_dir, ignore_errors=True)
+        
         del projects[username][project_id]
         save_projects(projects)
         
@@ -681,6 +950,16 @@ def deploy_project_files(username, project_id):
         return False, "Project not found"
     
     project_dir = FILES_ROOT / username / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Download all files from GitHub to local
+    files = github_storage.list_files(username, project_id)
+    for filename in files:
+        content = github_storage.get_file(username, project_id, filename)
+        if content:
+            filepath = project_dir / filename
+            with open(filepath, 'wb') as f:
+                f.write(content)
     
     analysis = deployment_engine.analyze_project(project_dir)
     
@@ -698,6 +977,7 @@ def deploy_project_files(username, project_id):
         
         save_projects(projects)
     
+    # Install dependencies
     install_results = deployment_engine.install_dependencies(project_dir, analysis["project_type"])
     
     projects = load_projects()
@@ -721,6 +1001,17 @@ def start_project_process(username, project_id):
         return False, "Project not found"
     
     project_dir = FILES_ROOT / username / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Download files if not present
+    files = github_storage.list_files(username, project_id)
+    for filename in files:
+        content = github_storage.get_file(username, project_id, filename)
+        if content:
+            filepath = project_dir / filename
+            with open(filepath, 'wb') as f:
+                f.write(content)
+    
     run_command = project.get("run_command", "")
     
     if not run_command:
@@ -965,7 +1256,6 @@ def register():
             "banned": False,
         }
         save_users(users)
-        user_dir(username)
         
         flash("Account created successfully! Please login.", "success")
         return redirect(url_for("login"))
@@ -1192,9 +1482,7 @@ def user_dashboard():
             project_type = project.get("project_type", "unknown")
             project_framework = project.get("framework", "unknown")
             project_deployment_status = project.get("deployment_status", "not_deployed")
-            
-            project_dir = FILES_ROOT / u / project_id
-            project_has_files = project_dir.exists() and any(project_dir.iterdir())
+            project_has_files = len(project_files) > 0
         
         return render_template("user.html",
             username=u,
@@ -1262,9 +1550,17 @@ def upload():
             if f and f.filename:
                 name = secure_filename(f.filename)
                 if name:
-                    file_path = project_dir / name
-                    f.save(file_path)
+                    content = f.read()
                     
+                    # Save to GitHub storage
+                    github_storage.save_file(u, project_id, name, content, is_binary=True)
+                    
+                    # Also save locally for deployment
+                    file_path = project_dir / name
+                    with open(file_path, 'wb') as out:
+                        out.write(content)
+                    
+                    # Check if it's a zip/tar file
                     if name.endswith('.zip') or name.endswith('.tar.gz') or name.endswith('.tgz') or name.endswith('.tar'):
                         try:
                             if name.endswith('.zip'):
@@ -1277,14 +1573,41 @@ def upload():
                                 else:
                                     with tarfile.open(file_path, 'r') as tar_ref:
                                         tar_ref.extractall(project_dir)
+                            
+                            # Upload extracted files to GitHub
+                            for extracted in project_dir.iterdir():
+                                if extracted.is_file() and extracted.name != name:
+                                    with open(extracted, 'rb') as ef:
+                                        github_storage.save_file(u, project_id, extracted.name, ef.read(), is_binary=True)
+                            
                             os.remove(file_path)
                             extracted_count += 1
+                            flash(f"📦 Extracted {name}!", "success")
                         except Exception as e:
                             flash(f"❌ Failed to extract {name}: {str(e)}", "error")
                     else:
                         uploaded_count += 1
         
         if uploaded_count > 0 or extracted_count > 0:
+            # Install dependencies if requirements.txt exists
+            req_file = project_dir / "requirements.txt"
+            if req_file.exists():
+                try:
+                    flash("📦 Installing dependencies from requirements.txt...", "info")
+                    result = subprocess.run(
+                        ['pip', 'install', '-r', str(req_file)],
+                        cwd=str(project_dir),
+                        capture_output=True,
+                        text=True,
+                        timeout=300
+                    )
+                    if result.returncode == 0:
+                        flash("✅ Dependencies installed successfully!", "success")
+                    else:
+                        flash(f"⚠️ Some packages failed to install: {result.stderr[:200]}", "warning")
+                except Exception as e:
+                    flash(f"❌ Error installing dependencies: {str(e)}", "error")
+            
             success, results = deploy_project_files(u, project_id)
             if success:
                 flash(f"✅ {uploaded_count} files uploaded, {extracted_count} archives extracted, project deployed!", "success")
@@ -1326,6 +1649,7 @@ def upload_requirements():
             return redirect(url_for("user_dashboard"))
         
         project_dir = FILES_ROOT / u / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
         
         if 'requirements' not in request.files:
             flash("No file uploaded!", "error")
@@ -1337,11 +1661,21 @@ def upload_requirements():
             return redirect(url_for("user_dashboard"))
         
         name = secure_filename(file.filename)
-        file.save(project_dir / name)
+        content = file.read()
         
+        # Save to GitHub storage
+        github_storage.save_file(u, project_id, name, content.decode('utf-8'), is_binary=False)
+        
+        # Save locally
+        file_path = project_dir / name
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content.decode('utf-8'))
+        
+        # Install requirements
         try:
+            flash("📦 Installing dependencies from requirements.txt...", "info")
             result = subprocess.run(
-                ['pip', 'install', '-r', str(project_dir / name)],
+                ['pip', 'install', '-r', str(file_path)],
                 cwd=str(project_dir),
                 capture_output=True,
                 text=True,
@@ -1381,6 +1715,21 @@ def deploy_project():
             return jsonify({"success": False, "error": "No project found!"}), 400
         
         project_id = list(projects.keys())[0]
+        
+        # Install dependencies first
+        project_dir = FILES_ROOT / u / project_id
+        req_file = project_dir / "requirements.txt"
+        if req_file.exists():
+            try:
+                subprocess.run(
+                    ['pip', 'install', '-r', str(req_file)],
+                    cwd=str(project_dir),
+                    capture_output=True,
+                    timeout=300
+                )
+            except:
+                pass
+        
         success, results = deploy_project_files(u, project_id)
         
         if success:
@@ -1424,13 +1773,31 @@ def get_env_vars():
         if not project_id:
             return jsonify({"env_vars": []})
         
-        project = get_project(u, project_id)
-        if project:
-            env_vars = project.get("env_vars", {})
-            env_list = [{"key": k, "value": v} for k, v in env_vars.items()]
-            return jsonify({"env_vars": env_list})
+        # Check if .env exists in GitHub
+        env_content = github_storage.get_file(u, project_id, ".env")
+        env_vars = []
         
-        return jsonify({"env_vars": []})
+        if env_content:
+            try:
+                content_str = env_content.decode('utf-8')
+                for line in content_str.split('\n'):
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        if '=' in line:
+                            key, value = line.split('=', 1)
+                            env_vars.append({"key": key.strip(), "value": value.strip()})
+            except:
+                pass
+        
+        project = get_project(u, project_id)
+        if project and project.get("env_vars"):
+            # Merge with stored env vars
+            stored = project.get("env_vars", {})
+            for key, value in stored.items():
+                if not any(e["key"] == key for e in env_vars):
+                    env_vars.append({"key": key, "value": value})
+        
+        return jsonify({"env_vars": env_vars})
     except Exception as e:
         app.logger.error(f"Get env vars error: {e}")
         return jsonify({"env_vars": []})
@@ -1449,6 +1816,16 @@ def save_env_vars():
         data = request.json
         env_vars = data.get("env_vars", [])
         
+        # Create .env content
+        env_content = ""
+        for env in env_vars:
+            if env.get("key") and env.get("value"):
+                env_content += f"{env['key']}={env['value']}\n"
+        
+        # Save to GitHub
+        github_storage.save_file(u, project_id, ".env", env_content, is_binary=False)
+        
+        # Update project
         env_dict = {}
         for env in env_vars:
             if env.get("key") and env.get("value"):
@@ -1458,15 +1835,6 @@ def save_env_vars():
         if u in projects and project_id in projects[u]:
             projects[u][project_id]["env_vars"] = env_dict
             save_projects(projects)
-            
-            project_dir = FILES_ROOT / u / project_id
-            env_file = project_dir / ".env"
-            try:
-                with open(env_file, 'w') as f:
-                    for key, value in env_dict.items():
-                        f.write(f"{key}={value}\n")
-            except Exception as e:
-                return jsonify({"success": False, "error": f"Failed to save .env: {str(e)}"}), 500
             
             threading.Thread(target=lambda: manual_backup(f"Environment variables saved for {project_id} by {u}"), daemon=True).start()
             return jsonify({"success": True})
@@ -1487,15 +1855,14 @@ def clear_env_vars():
         if not project_id:
             return jsonify({"success": False, "error": "No project found"}), 400
         
+        # Delete .env from GitHub
+        github_storage.delete_file(u, project_id, ".env")
+        
+        # Update project
         projects = load_projects()
         if u in projects and project_id in projects[u]:
             projects[u][project_id]["env_vars"] = {}
             save_projects(projects)
-            
-            project_dir = FILES_ROOT / u / project_id
-            env_file = project_dir / ".env"
-            if env_file.exists():
-                env_file.unlink()
             
             threading.Thread(target=lambda: manual_backup(f"Environment variables cleared for {project_id} by {u}"), daemon=True).start()
             return jsonify({"success": True})
@@ -1519,26 +1886,24 @@ def file_delete(name):
             return redirect(url_for("user_dashboard"))
         
         project_id = list(projects.keys())[0]
-        project_dir = FILES_ROOT / u / project_id
         safe_name = secure_filename(name)
         
         if not safe_name:
             flash("Invalid filename!", "error")
             return redirect(url_for("user_dashboard"))
         
-        filepath = project_dir / safe_name
+        # Delete from GitHub
+        github_storage.delete_file(u, project_id, safe_name)
         
-        if filepath.exists() and filepath.is_file():
-            if safe_name in ['.env', 'requirements.txt', 'run_command.txt']:
-                flash(f"Cannot delete {safe_name}. Use the appropriate management interface.", "warning")
-                return redirect(url_for("user_dashboard"))
-            
+        # Delete locally
+        project_dir = FILES_ROOT / u / project_id
+        filepath = project_dir / safe_name
+        if filepath.exists():
             filepath.unlink()
-            flash(f"File '{name}' deleted successfully!", "success")
-            update_project_files(u, project_id)
-            threading.Thread(target=lambda: manual_backup(f"File deleted: {name} by {u}"), daemon=True).start()
-        else:
-            flash("File not found!", "error")
+        
+        flash(f"File '{name}' deleted successfully!", "success")
+        update_project_files(u, project_id)
+        threading.Thread(target=lambda: manual_backup(f"File deleted: {name} by {u}"), daemon=True).start()
     except Exception as e:
         app.logger.error(f"File delete error: {e}")
         flash(f"Error deleting file: {str(e)}", "error")
@@ -1557,20 +1922,32 @@ def file_view(name):
             return redirect(url_for("user_dashboard"))
         
         project_id = list(projects.keys())[0]
-        project_dir = FILES_ROOT / u / project_id
         safe_name = secure_filename(name)
         
         if not safe_name:
             flash("Invalid filename!", "error")
             return redirect(url_for("user_dashboard"))
         
+        # Try to get from GitHub
+        content = github_storage.get_file(u, project_id, safe_name)
+        
+        if content:
+            # Save locally temporarily
+            project_dir = FILES_ROOT / u / project_id
+            project_dir.mkdir(parents=True, exist_ok=True)
+            filepath = project_dir / safe_name
+            with open(filepath, 'wb') as f:
+                f.write(content)
+            return send_from_directory(project_dir, safe_name, as_attachment=False)
+        
+        # Try local
+        project_dir = FILES_ROOT / u / project_id
         filepath = project_dir / safe_name
+        if filepath.exists():
+            return send_from_directory(project_dir, safe_name, as_attachment=False)
         
-        if not filepath.exists() or not filepath.is_file():
-            flash("File not found!", "error")
-            return redirect(url_for("user_dashboard"))
-        
-        return send_from_directory(project_dir, safe_name, as_attachment=False)
+        flash("File not found!", "error")
+        return redirect(url_for("user_dashboard"))
     except Exception as e:
         app.logger.error(f"File view error: {e}")
         flash(f"Error viewing file: {str(e)}", "error")
@@ -1615,6 +1992,9 @@ def projects_list():
         u = current_user()
         projects = get_user_projects(u)
         for pid, project in projects.items():
+            # Update files from GitHub
+            files = github_storage.list_files(u, pid)
+            project["files"] = files
             project["is_running"] = is_project_running(u, pid)
             resources = get_project_resources(u, pid)
             project["cpu"] = resources["cpu"]
@@ -1672,18 +2052,18 @@ def project_detail(project_id):
             flash("Project not found!", "error")
             return redirect(url_for("projects_list"))
         
-        project_dir = FILES_ROOT / u / project_id
-        files = []
-        if project_dir.exists():
-            files = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
-        
+        # Get files from GitHub
+        files = github_storage.list_files(u, project_id)
         project["files"] = files
+        
         project["is_running"] = is_project_running(u, project_id)
         project["logs"] = get_project_logs(u, project_id, 100)
         resources = get_project_resources(u, project_id)
         project["cpu"] = resources["cpu"]
         project["ram_mb"] = resources["ram_mb"]
         
+        # Analyze project
+        project_dir = FILES_ROOT / u / project_id
         analysis = deployment_engine.analyze_project(project_dir)
         project["project_type"] = analysis.get("project_type", "unknown")
         project["framework"] = analysis.get("framework", "unknown")
@@ -1705,6 +2085,8 @@ def project_upload(project_id):
             return redirect(url_for("projects_list"))
         
         project_dir = FILES_ROOT / u / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        
         files = request.files.getlist("files")
         uploaded_count = 0
         extracted_count = 0
@@ -1716,8 +2098,15 @@ def project_upload(project_id):
             if not name:
                 continue
             
+            content = file.read()
+            
+            # Save to GitHub
+            github_storage.save_file(u, project_id, name, content, is_binary=True)
+            
+            # Save locally
             file_path = project_dir / name
-            file.save(file_path)
+            with open(file_path, 'wb') as f:
+                f.write(content)
             
             if name.endswith('.zip') or name.endswith('.tar.gz') or name.endswith('.tgz') or name.endswith('.tar'):
                 try:
@@ -1731,6 +2120,13 @@ def project_upload(project_id):
                         else:
                             with tarfile.open(file_path, 'r') as tar_ref:
                                 tar_ref.extractall(project_dir)
+                    
+                    # Upload extracted files to GitHub
+                    for extracted in project_dir.iterdir():
+                        if extracted.is_file() and extracted.name != name:
+                            with open(extracted, 'rb') as ef:
+                                github_storage.save_file(u, project_id, extracted.name, ef.read(), is_binary=True)
+                    
                     os.remove(file_path)
                     extracted_count += 1
                     flash(f"📦 Extracted {name}!", "success")
@@ -1741,6 +2137,19 @@ def project_upload(project_id):
                 flash(f"📄 Uploaded {name}", "success")
         
         if uploaded_count > 0 or extracted_count > 0:
+            # Install dependencies
+            req_file = project_dir / "requirements.txt"
+            if req_file.exists():
+                try:
+                    subprocess.run(
+                        ['pip', 'install', '-r', str(req_file)],
+                        cwd=str(project_dir),
+                        capture_output=True,
+                        timeout=300
+                    )
+                except:
+                    pass
+            
             success, results = deploy_project_files(u, project_id)
             if success:
                 flash(f"🚀 Project auto-deployed!", "success")
@@ -1769,19 +2178,17 @@ def project_file_delete(project_id, filename):
             flash("Invalid filename!", "error")
             return redirect(url_for("project_detail", project_id=project_id))
         
-        filepath = project_dir / safe_name
+        # Delete from GitHub
+        github_storage.delete_file(u, project_id, safe_name)
         
-        if filepath.exists() and filepath.is_file():
-            if safe_name in ['.env', 'requirements.txt', 'run_command.txt']:
-                flash(f"Cannot delete {safe_name}. Use the appropriate management interface.", "warning")
-                return redirect(url_for("project_detail", project_id=project_id))
-            
+        # Delete locally
+        filepath = project_dir / safe_name
+        if filepath.exists():
             filepath.unlink()
-            flash(f"File '{filename}' deleted successfully!", "success")
-            update_project_files(u, project_id)
-            threading.Thread(target=lambda: manual_backup(f"File deleted: {filename} from project {project_id} by {u}"), daemon=True).start()
-        else:
-            flash("File not found!", "error")
+        
+        flash(f"File '{filename}' deleted successfully!", "success")
+        update_project_files(u, project_id)
+        threading.Thread(target=lambda: manual_backup(f"File deleted: {filename} from project {project_id} by {u}"), daemon=True).start()
     except Exception as e:
         app.logger.error(f"Project file delete error: {e}")
         flash(f"Error deleting file: {str(e)}", "error")
@@ -2108,7 +2515,6 @@ def owner_create():
             "banned": False,
         }
         save_users(users)
-        user_dir(u)
         flash(f"User {u} created!", "success")
     except Exception as e:
         app.logger.error(f"Owner create error: {e}")
@@ -2399,7 +2805,8 @@ def debug():
         "status": "running",
         "service": "NCK Dev VPS",
         "github_backup_enabled": github_backup.is_enabled if github_backup else False,
-        "flw_enabled": FLW_ENABLED
+        "flw_enabled": FLW_ENABLED,
+        "github_storage_enabled": github_storage.is_enabled
     })
 
 if __name__ == "__main__":
