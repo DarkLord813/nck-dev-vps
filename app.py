@@ -206,17 +206,51 @@ def get_ton_price(plan_name):
     price_ngn = get_plan_price(plan_name, "NGN")
     return convert_price(price_ngn, "TON")
 
+def get_telegram_chat_id():
+    """Get or detect Telegram chat ID"""
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    
+    # If chat_id is not set, try to detect it
+    if not chat_id and TELEGRAM_BOT_TOKEN:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+            response = requests.get(url, timeout=10)
+            data = response.json()
+            
+            if data.get("ok") and data.get("result"):
+                for update in data["result"]:
+                    if "message" in update and "chat" in update["message"]:
+                        chat_id = str(update["message"]["chat"]["id"])
+                        print(f"✅ Auto-detected Telegram chat ID: {chat_id}")
+                        break
+                    elif "callback_query" in update and "message" in update["callback_query"]:
+                        chat_id = str(update["callback_query"]["message"]["chat"]["id"])
+                        print(f"✅ Auto-detected Telegram chat ID: {chat_id}")
+                        break
+        except Exception as e:
+            print(f"⚠️ Could not auto-detect chat ID: {e}")
+    
+    return chat_id
+
 # ==================== TELEGRAM NOTIFICATIONS ====================
 def send_telegram_notification(message):
     """Send notification to Telegram"""
-    if not TELEGRAM_ENABLED:
-        print("⚠️ Telegram not configured")
+    bot_token = TELEGRAM_BOT_TOKEN
+    chat_id = get_telegram_chat_id()
+    
+    if not bot_token:
+        print("⚠️ Telegram bot token not configured")
+        return False
+    
+    if not chat_id:
+        print("⚠️ Telegram chat ID not found. Send a message to your bot first!")
+        print("   Then visit: https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates")
         return False
     
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
+            "chat_id": chat_id,
             "text": message,
             "parse_mode": "HTML"
         }
@@ -693,7 +727,6 @@ def start_project_process(username, project_id):
     
     # If no run command, try to auto-detect
     if not run_command:
-        from . import deployment_engine
         analysis = deployment_engine.analyze_project(project_dir)
         if analysis.get("run_command"):
             run_command = analysis["run_command"]
@@ -1181,7 +1214,9 @@ def register():
         
         # Send Telegram notification
         if TELEGRAM_ENABLED:
-            message = f"""
+            chat_id = get_telegram_chat_id()
+            if chat_id:
+                message = f"""
 🆕 <b>NEW USER REGISTRATION!</b>
 
 👤 Username: {username}
@@ -1199,7 +1234,9 @@ def register():
 
 📊 Status: ⏳ Payment Pending
 """
-            send_telegram_notification(message)
+                send_telegram_notification(message)
+            else:
+                print("⚠️ Telegram chat ID not found - notification not sent")
         
         flash("Account created successfully! Please contact the owner to complete payment.", "success")
         return redirect(url_for("login"))
@@ -2119,6 +2156,7 @@ def project_custom_domain(project_id):
     
     return redirect(url_for("project_detail", project_id=project_id))
 
+# ==================== PROJECT DELETE ROUTE (FIXED - Redirects to Page) ====================
 @app.route("/project/<project_id>/delete", methods=["POST"])
 @require_user
 def project_delete(project_id):
@@ -2126,20 +2164,26 @@ def project_delete(project_id):
         u = current_user()
         project = get_project(u, project_id)
         if not project:
-            return jsonify({"success": False, "error": "Project not found"}), 404
+            flash("Project not found!", "error")
+            return redirect(url_for("projects_list"))
+        
+        project_name = project.get("name", "Unknown")
         
         # Stop the project if running
         stop_project_process(u, project_id)
         
         # Delete the project
         if delete_project(u, project_id):
-            threading.Thread(target=lambda: manual_backup(f"Project deleted: {project['name']} by {u}"), daemon=True).start()
-            return jsonify({"success": True, "message": f"Project '{project['name']}' deleted!"})
+            flash(f"✅ Project '{project_name}' deleted successfully!", "success")
+            threading.Thread(target=lambda: manual_backup(f"Project deleted: {project_name} by {u}"), daemon=True).start()
         else:
-            return jsonify({"success": False, "error": "Failed to delete project"}), 500
+            flash(f"❌ Failed to delete project '{project_name}'!", "error")
+        
+        return redirect(url_for("projects_list"))
     except Exception as e:
         app.logger.error(f"Project delete error: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        flash(f"Error deleting project: {str(e)}", "error")
+        return redirect(url_for("projects_list"))
 
 @app.route("/project/<project_id>/deploy", methods=["POST"])
 @require_user
@@ -2561,6 +2605,35 @@ def admin_blocked_ips():
     except Exception as e:
         app.logger.error(f"Admin blocked IPs error: {e}")
         return jsonify({"error": str(e)}), 500
+
+# ==================== TEST TELEGRAM ROUTE ====================
+@app.route("/test-telegram")
+def test_telegram():
+    """Test Telegram notifications"""
+    if not TELEGRAM_BOT_TOKEN:
+        return jsonify({"error": "TELEGRAM_BOT_TOKEN not set"}), 400
+    
+    chat_id = get_telegram_chat_id()
+    if not chat_id:
+        return jsonify({
+            "error": "No chat ID found. Send a message to your bot first!",
+            "instructions": f"1. Open Telegram and message your bot\n2. Visit: https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates\n3. Copy your chat ID from the response"
+        }), 400
+    
+    result = send_telegram_notification(f"""
+🔔 <b>TELEGRAM TEST SUCCESSFUL!</b>
+
+✅ Your bot is configured correctly!
+📱 Chat ID: {chat_id}
+
+🎉 You will receive notifications when users register.
+""")
+    
+    return jsonify({
+        "success": result,
+        "chat_id": chat_id,
+        "message": "Test notification sent!" if result else "Failed to send"
+    })
 
 # ==================== ERROR HANDLING ====================
 
