@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Upload Status — NCK Dev VPS{% endblock %}
+{% block body %}
+<div class="wrap">
+  <div class="card" style="text-align:center;padding:40px">
+    <h2>📤 Upload Processing</h2>
+    <p class="muted">Your files are being processed. This may take a few moments...</p>
+    
+    <div style="margin:30px 0">
+      <div style="background:rgba(10,14,32,0.5);border-radius:10px;height:20px;overflow:hidden;border:1px solid var(--border)">
+        <div id="progress-bar" style="width:0%;height:100%;background:var(--grad);transition:width 0.5s ease;border-radius:10px"></div>
+      </div>
+      <p id="status-message" class="muted" style="margin-top:10px">Starting...</p>
+    </div>
+    
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <a href="/dashboard" class="btn btn-ghost">🔙 Go to Dashboard</a>
+      <a href="/project/{{project_id}}" class="btn btn-primary">📂 Open Project</a>
+    </div>
+  </div>
+</div>
+
+<script>
+// Poll for upload status
+let progress = 0;
+let attempts = 0;
+const maxAttempts = 60; // 60 seconds max
+
+function checkStatus() {
+    fetch('/upload-status-json')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'complete' || data.status === 'error') {
+                // Done
+                document.getElementById('progress-bar').style.width = '100%';
+                document.getElementById('status-message').textContent = data.message || '✅ Complete!';
+                document.getElementById('status-message').style.color = data.status === 'complete' ? '#6ee7b7' : '#fca5a5';
+                return;
+            }
+            
+            // Update progress
+            if (data.progress !== undefined) {
+                progress = data.progress || 0;
+                document.getElementById('progress-bar').style.width = progress + '%';
+            }
+            
+            if (data.message) {
+                document.getElementById('status-message').textContent = data.message;
+            }
+            
+            // Continue polling
+            attempts++;
+            if (attempts < maxAttempts) {
+                setTimeout(checkStatus, 1000);
+            } else {
+                document.getElementById('status-message').textContent = '⏳ Processing is taking longer than expected...';
+                document.getElementById('status-message').style.color = '#fbbf24';
+            }
+        })
+        .catch(() => {
+            attempts++;
+            if (attempts < maxAttempts) {
+                setTimeout(checkStatus, 2000);
+            }
+        });
+}
+
+// Start checking after 1 second
+setTimeout(checkStatus, 1000);
+</script>
+{% endblock %}
