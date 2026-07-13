@@ -48,8 +48,8 @@ SUPPORTED_CURRENCIES = {
         "name": "Nigerian Naira",
         "country": "Nigeria",
         "flag": "🇳🇬",
-        "exchange_rate": 1.0,  # Base currency
-        "ton_price": 0.015,    # Price in TON
+        "exchange_rate": 1.0,
+        "ton_price": 0.015,
         "gift_card_options": ["Amazon", "Steam", "Google Play", "Apple", "PlayStation", "Xbox"]
     },
     "USD": {
@@ -57,8 +57,8 @@ SUPPORTED_CURRENCIES = {
         "name": "US Dollar",
         "country": "United States",
         "flag": "🇺🇸",
-        "exchange_rate": 0.0016,  # 1 NGN = 0.0016 USD
-        "ton_price": 0.0025,      # Price in TON (approx $0.0025 per TON)
+        "exchange_rate": 0.0016,
+        "ton_price": 0.0025,
         "gift_card_options": ["Amazon", "Steam", "Google Play", "Apple", "PlayStation", "Xbox", "Best Buy", "Target"]
     },
     "EUR": {
@@ -66,8 +66,8 @@ SUPPORTED_CURRENCIES = {
         "name": "Euro",
         "country": "Europe",
         "flag": "🇪🇺",
-        "exchange_rate": 0.0015,  # 1 NGN = 0.0015 EUR
-        "ton_price": 0.0023,      # Price in TON
+        "exchange_rate": 0.0015,
+        "ton_price": 0.0023,
         "gift_card_options": ["Amazon", "Steam", "Google Play", "Apple", "PlayStation"]
     },
     "GBP": {
@@ -75,8 +75,8 @@ SUPPORTED_CURRENCIES = {
         "name": "British Pound",
         "country": "United Kingdom",
         "flag": "🇬🇧",
-        "exchange_rate": 0.0013,  # 1 NGN = 0.0013 GBP
-        "ton_price": 0.0020,      # Price in TON
+        "exchange_rate": 0.0013,
+        "ton_price": 0.0020,
         "gift_card_options": ["Amazon", "Steam", "Google Play", "Apple", "PlayStation"]
     },
     "TON": {
@@ -84,8 +84,8 @@ SUPPORTED_CURRENCIES = {
         "name": "TON Coin",
         "country": "Global",
         "flag": "💎",
-        "exchange_rate": 400.0,    # 1 TON = 400 NGN (approx)
-        "ton_price": 1.0,          # Price in TON (1 TON = 1 TON)
+        "exchange_rate": 400.0,
+        "ton_price": 1.0,
         "gift_card_options": ["Amazon", "Steam", "Google Play", "Apple"]
     }
 }
@@ -143,6 +143,28 @@ PAYMENT_METHODS = {
     }
 }
 
+if not USERS_FILE.exists():
+    USERS_FILE.write_text("{}")
+if not PRICING_FILE.exists():
+    PRICING_FILE.write_text(json.dumps(DEFAULT_PRICING, indent=2))
+if not PROJECTS_FILE.exists():
+    PROJECTS_FILE.write_text("{}")
+if not PAYMENTS_FILE.exists():
+    PAYMENTS_FILE.write_text("{}")
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
+
+# ==================== LOGGING ====================
+LOG_DIR = APP_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+file_handler = RotatingFileHandler(LOG_DIR / "app.log", maxBytes=10485760, backupCount=10)
+file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+file_handler.setLevel(logging.INFO)
+app.logger.addHandler(file_handler)
+app.logger.setLevel(logging.INFO)
+
 # ==================== CONVERT PRICE FUNCTION ====================
 def convert_price(amount_ngn, target_currency):
     """Convert price from NGN to target currency"""
@@ -183,6 +205,26 @@ def get_ton_price(plan_name):
     """Get TON price for a plan"""
     price_ngn = get_plan_price(plan_name, "NGN")
     return convert_price(price_ngn, "TON")
+
+# ==================== TELEGRAM NOTIFICATIONS ====================
+def send_telegram_notification(message):
+    """Send notification to Telegram"""
+    if not TELEGRAM_ENABLED:
+        print("⚠️ Telegram not configured")
+        return False
+    
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"❌ Telegram error: {e}")
+        return False
 
 # ==================== GITHUB BACKUP SYSTEM ====================
 class GitHubBackupSystem:
@@ -389,26 +431,6 @@ def get_backup_status():
     if github_backup:
         return github_backup.get_status()
     return {"enabled": False}
-
-# ==================== TELEGRAM NOTIFICATIONS ====================
-def send_telegram_notification(message):
-    """Send notification to Telegram"""
-    if not TELEGRAM_ENABLED:
-        print("⚠️ Telegram not configured")
-        return False
-    
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
-            "parse_mode": "HTML"
-        }
-        response = requests.post(url, json=payload, timeout=10)
-        return response.status_code == 200
-    except Exception as e:
-        print(f"❌ Telegram error: {e}")
-        return False
 
 # ==================== PORT MANAGEMENT ====================
 class PortManager:
@@ -711,6 +733,30 @@ def update_project_files(username, project_id):
         app.logger.error(f"Error updating project files: {str(e)}")
     return False
 
+# ==================== FIX MISSING PROJECT DIRECTORIES ====================
+def fix_missing_project_directories():
+    """Check all projects and create missing directories"""
+    projects = load_projects()
+    fixed_count = 0
+    
+    for username, user_projects in projects.items():
+        for project_id, project_data in user_projects.items():
+            project_dir = FILES_ROOT / username / project_id
+            if not project_dir.exists():
+                app.logger.warning(f"Creating missing directory for {username}/{project_id}")
+                project_dir.mkdir(parents=True, exist_ok=True)
+                fixed_count += 1
+    
+    if fixed_count > 0:
+        app.logger.info(f"✅ Fixed {fixed_count} missing project directories")
+        threading.Thread(target=lambda: manual_backup("Fixed missing project directories"), daemon=True).start()
+
+# Run this on startup
+try:
+    fix_missing_project_directories()
+except Exception as e:
+    app.logger.error(f"Error fixing project directories: {e}")
+
 # ==================== AUTH ====================
 def is_owner():
     return session.get("role") == "owner"
@@ -768,6 +814,10 @@ def create_project(username, project_name, description=""):
     
     port = port_manager.get_available_port(username, project_id)
     
+    # Create physical directory FIRST
+    project_dir = FILES_ROOT / username / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    
     projects[username][project_id] = {
         "id": project_id,
         "name": project_name,
@@ -791,16 +841,13 @@ def create_project(username, project_name, description=""):
         "restart_on_crash": False,
         "crash_count": 0,
         "last_crash_time": None,
-        "deployment_status": "not_deployed",
+        "deployment_status": "created",
         "deployment_log": [],
         "project_type": "unknown",
         "framework": "unknown",
         "dependencies_installed": False
     }
     save_projects(projects)
-    
-    project_dir = FILES_ROOT / username / project_id
-    project_dir.mkdir(parents=True, exist_ok=True)
     
     threading.Thread(target=lambda: manual_backup(f"Project created: {project_name} by {username}"), daemon=True).start()
     
@@ -827,6 +874,10 @@ def deploy_project_files(username, project_id):
         return False, "Project not found"
     
     project_dir = FILES_ROOT / username / project_id
+    
+    # Ensure directory exists before deploying
+    if not project_dir.exists():
+        project_dir.mkdir(parents=True, exist_ok=True)
     
     analysis = deployment_engine.analyze_project(project_dir)
     
@@ -1367,6 +1418,7 @@ def upload_requirements():
             return redirect(url_for("user_dashboard"))
         
         project_dir = FILES_ROOT / u / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
         
         if 'requirements' not in request.files:
             flash("No file uploaded!", "error")
@@ -1696,7 +1748,17 @@ def project_create():
             return redirect(url_for("projects_list"))
         
         project_id = create_project(u, name, description)
-        flash(f"✅ Project '{name}' created!", "success")
+        
+        # Ensure the project directory is created
+        project_dir = FILES_ROOT / u / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Verify directory was created
+        if project_dir.exists():
+            flash(f"✅ Project '{name}' created successfully!", "success")
+        else:
+            flash(f"⚠️ Project '{name}' created but directory could not be created. Please contact support.", "warning")
+        
         return redirect(url_for("project_detail", project_id=project_id))
     except Exception as e:
         app.logger.error(f"Project create error: {e}")
@@ -1713,7 +1775,18 @@ def project_detail(project_id):
             flash("Project not found!", "error")
             return redirect(url_for("projects_list"))
         
+        # Ensure project directory exists
         project_dir = FILES_ROOT / u / project_id
+        if not project_dir.exists():
+            app.logger.warning(f"Project directory missing, creating: {project_dir}")
+            project_dir.mkdir(parents=True, exist_ok=True)
+            # Update project in database to mark it as created
+            projects = load_projects()
+            if u in projects and project_id in projects[u]:
+                projects[u][project_id]["deployment_status"] = "created"
+                save_projects(projects)
+        
+        # List files
         files = []
         if project_dir.exists():
             files = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
@@ -1725,7 +1798,7 @@ def project_detail(project_id):
         project["cpu"] = resources["cpu"]
         project["ram_mb"] = resources["ram_mb"]
         
-        analysis = deployment_engine.analyze_project(project_dir)
+        analysis = deployment_engine.analyze_project(project_dir) if project_dir.exists() else {"project_type": "unknown", "framework": "unknown"}
         project["project_type"] = analysis.get("project_type", "unknown")
         project["framework"] = analysis.get("framework", "unknown")
         
@@ -1746,6 +1819,8 @@ def project_upload(project_id):
             return redirect(url_for("projects_list"))
         
         project_dir = FILES_ROOT / u / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        
         files = request.files.getlist("files")
         uploaded_count = 0
         extracted_count = 0
