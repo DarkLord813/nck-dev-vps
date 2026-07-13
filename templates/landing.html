@@ -19,7 +19,7 @@
       <div class="card"><h3>⚡ Instant Deploy</h3><p class="muted">Upload any script and run it on real servers with one click.</p></div>
       <div class="card"><h3>📦 Module Install</h3><p class="muted">Run <code>pip install</code> or <code>npm install</code> right from the dashboard.</p></div>
       <div class="card"><h3>📜 Live Logs</h3><p class="muted">Real-time stdout/stderr streaming — see exactly what's happening.</p></div>
-      <div class="card"><h3>🎯 Subscription Plans</h3><p class="muted">Choose from Basic ($3/mo), Pro ($18/yr), or Premium ($30/yr).</p></div>
+      <div class="card"><h3>🎯 Subscription Plans</h3><p class="muted">Choose from Basic, Pro, or Premium with multi-currency support!</p></div>
     </div>
   </section>
 
@@ -32,14 +32,25 @@
         {% if loop.index == 2 %}<div class="badge badge-on" style="background:var(--grad);color:#fff;border:0;margin-bottom:10px">POPULAR</div>{% endif %}
         {% if loop.index == 3 %}<div class="badge" style="background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;border:0;margin-bottom:10px">🏆 BEST VALUE</div>{% endif %}
         <h3 style="font-size:18px">{{p.name}}</h3>
-        <div style="font-size:34px;font-weight:800;margin:10px 0" class="gradient-text">₦{{p.price}}</div>
+        <div style="font-size:34px;font-weight:800;margin:10px 0" class="gradient-text">{{pricing.currency}}{{p.price}}</div>
         <div class="muted" style="font-size:13px;margin-bottom:14px">{{p.duration}}</div>
         <div style="font-size:13px;color:#c7cce8;min-height:60px">{{p.features}}</div>
         <a href="/register" class="btn btn-primary" style="margin-top:14px;width:100%;justify-content:center">Sign Up</a>
       </div>
       {% endfor %}
     </div>
-    {% if pricing.contact %}<p class="muted" style="text-align:center;margin-top:24px">📞 Contact owner to buy: <b style="color:#c7d2fe">{{pricing.contact}}</b></p>{% endif %}
+    <div class="card" style="margin-top:24px;text-align:center;border:2px solid var(--border)">
+      <h3>💱 Multi-Currency Support</h3>
+      <div style="display:flex;justify-content:center;gap:20px;flex-wrap:wrap">
+        <span class="badge badge-currency">🇳🇬 ₦ NGN</span>
+        <span class="badge badge-currency">🇺🇸 $ USD</span>
+        <span class="badge badge-currency">🇪🇺 € EUR</span>
+        <span class="badge badge-currency">🇬🇧 £ GBP</span>
+        <span class="badge badge-currency">💎 ⧫ TON</span>
+      </div>
+      <p class="muted" style="margin-top:10px">Pay in your preferred currency!</p>
+    </div>
+    {% if pricing.contact %}<p class="muted" style="text-align:center;margin-top:24px">📞 Contact owner: <b style="color:#c7d2fe">{{pricing.contact}}</b></p>{% endif %}
   </section>
 </div>
 {% endblock %}

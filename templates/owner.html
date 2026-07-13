@@ -14,7 +14,7 @@
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:20px">
     <div class="card" style="text-align:center;padding:14px">
       <div style="font-size:28px">👥</div>
-      <div style="font-size:24px;font-weight:700">{{users|length if users else 0}}</div>
+      <div style="font-size:24px;font-weight:700" id="total-users">{{users|length if users else 0}}</div>
       <div class="muted" style="font-size:12px">Total Users</div>
     </div>
     <div class="card" style="text-align:center;padding:14px">
@@ -23,14 +23,33 @@
       <div class="muted" style="font-size:12px">Total Projects</div>
     </div>
     <div class="card" style="text-align:center;padding:14px">
-      <div style="font-size:28px">💾</div>
-      <div style="font-size:24px;font-weight:700">{{backup_info.backup_count if backup_info and backup_info.backup_count else 0}}</div>
-      <div class="muted" style="font-size:12px">Backups</div>
+      <div style="font-size:28px">💰</div>
+      <div style="font-size:24px;font-weight:700" id="paid-users">{{paid_users or 0}}</div>
+      <div class="muted" style="font-size:12px">Paid Users</div>
     </div>
     <div class="card" style="text-align:center;padding:14px">
-      <div style="font-size:28px">🟢</div>
-      <div style="font-size:24px;font-weight:700">{{ '✅' if backup_info and backup_info.enabled else '❌' }}</div>
-      <div class="muted" style="font-size:12px">GitHub Backup</div>
+      <div style="font-size:28px">🚫</div>
+      <div style="font-size:24px;font-weight:700" id="banned-users">{{banned_users or 0}}</div>
+      <div class="muted" style="font-size:12px">Banned Users</div>
+    </div>
+  </div>
+
+  <!-- ==================== SEARCH BAR ==================== -->
+  <div class="card" style="margin-bottom:18px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <div style="flex:1;min-width:200px;position:relative">
+        <input 
+          id="search-users" 
+          type="text" 
+          placeholder="🔍 Search users by username, email, subscription..." 
+          oninput="filterUsers(this.value)"
+          style="width:100%;padding-left:40px;background:rgba(10,14,32,0.7)"
+        >
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('search-users').value='';filterUsers('')">Clear</button>
+        <button class="btn btn-ghost btn-sm" onclick="location.reload()">🔄 Refresh</button>
+      </div>
     </div>
   </div>
 
@@ -42,9 +61,16 @@
       <input name="email" type="email" placeholder="Email" required>
       <input name="password" placeholder="Password" required>
       <select name="subscription" style="max-width:140px">
-        <option value="Basic">Basic (₦2,500/mo)</option>
-        <option value="Pro" selected>Pro (₦15,000/yr)</option>
-        <option value="Premium">Premium (₦25,000/yr)</option>
+        <option value="Basic">Basic</option>
+        <option value="Pro" selected>Pro</option>
+        <option value="Premium">Premium</option>
+      </select>
+      <select name="currency" style="max-width:100px">
+        <option value="NGN">NGN</option>
+        <option value="USD">USD</option>
+        <option value="EUR">EUR</option>
+        <option value="GBP">GBP</option>
+        <option value="TON">TON</option>
       </select>
       <button class="btn btn-primary">Create User</button>
     </form>
@@ -52,25 +78,29 @@
 
   <!-- ==================== REGISTERED USERS ==================== -->
   <div class="card">
-    <h2>👥 Registered Users ({{users|length if users else 0}})</h2>
+    <h2>👥 Registered Users (<span id="visible-users">{{users|length if users else 0}}</span>)</h2>
     {% if not users %}<p class="muted">No users yet.</p>{% endif %}
     {% if users %}
     <div style="overflow-x:auto">
-    <table>
+    <table id="users-table">
+      <thead>
       <tr>
         <th>User</th>
         <th>Email</th>
         <th>Subscription</th>
+        <th>Currency</th>
         <th>Status</th>
         <th>Created</th>
-        <th>Projects</th>
         <th>Actions</th>
       </tr>
+      </thead>
+      <tbody>
       {% for name, u in users.items() %}
-      <tr>
+      <tr data-username="{{name.lower()}}" data-email="{{(u.email or '').lower()}}" data-subscription="{{(u.subscription or 'Basic').lower()}}">
         <td><b>{{name}}</b></td>
         <td>{{u.email or 'N/A'}}</td>
         <td><span class="badge badge-subscription">{{u.subscription or 'Basic'}}</span></td>
+        <td><span class="badge badge-currency">{{u.currency or 'NGN'}}</span></td>
         <td>
           {% if u.payment_status == 'paid' %}
             <span class="badge badge-on">✅ Paid</span>
@@ -82,17 +112,19 @@
           {% endif %}
         </td>
         <td class="muted" style="font-size:12px">{{ (u.created_at or 0)|int|string|truncate(20) }}</td>
-        <td><span class="badge badge-subscription">0</span></td>
         <td>
           <div style="display:flex;flex-direction:column;gap:4px">
             <div style="display:flex;gap:4px;flex-wrap:wrap">
               <form class="inline" method="post" action="/owner/update_subscription/{{name}}">
-                <select name="subscription" style="padding:4px 8px;font-size:11px;width:100px">
+                <select name="subscription" style="padding:4px 8px;font-size:11px;width:80px">
                   <option value="Basic" {% if u.subscription == 'Basic' %}selected{% endif %}>Basic</option>
                   <option value="Pro" {% if u.subscription == 'Pro' %}selected{% endif %}>Pro</option>
                   <option value="Premium" {% if u.subscription == 'Premium' %}selected{% endif %}>Premium</option>
                 </select>
                 <button class="btn btn-ok btn-sm">Update</button>
+              </form>
+              <form class="inline" method="post" action="/owner/mark-paid/{{name}}">
+                <button class="btn btn-primary btn-sm">✅ Mark Paid</button>
               </form>
               <form class="inline" method="post" action="/owner/delete/{{name}}" onsubmit="return confirm('Delete {{name}}?')">
                 <button class="btn btn-danger btn-sm">Delete</button>
@@ -113,8 +145,10 @@
         </td>
       </tr>
       {% endfor %}
+      </tbody>
     </table>
     </div>
+    <p class="muted" id="no-results" style="display:none;text-align:center;padding:20px">No users match your search.</p>
     {% endif %}
   </div>
 
@@ -128,7 +162,6 @@
       <form method="post" action="/owner/ban-all" onsubmit="return confirm('⚠️ Ban ALL users?')">
         <button class="btn btn-danger">🚫 Ban All</button>
       </form>
-      <button class="btn btn-ghost" onclick="location.reload()">🔄 Refresh</button>
     </div>
   </div>
 
@@ -144,10 +177,6 @@
       <form method="post" action="/admin/unblock-all-ips">
         <button class="btn btn-ok">🔓 Unblock All</button>
       </form>
-      <button class="btn btn-ghost" onclick="fetchBlockedIPs()">📊 View Blocked</button>
-    </div>
-    <div id="blocked-ips-list" style="margin-top:10px;background:rgba(10,14,32,0.5);border-radius:10px;padding:14px;border:1px solid var(--border);max-height:150px;overflow-y:auto">
-      <p class="muted">Click "View Blocked" to see blocked IPs.</p>
     </div>
   </div>
 
@@ -179,7 +208,7 @@
         <label style="display:flex;flex-direction:column;gap:4px"><span class="muted">Currency</span>
           <input name="currency" value="{{pricing.currency if pricing else 'NGN'}}" style="width:80px"></label>
         <label style="flex:1;display:flex;flex-direction:column;gap:4px"><span class="muted">Contact</span>
-          <input name="contact" value="{{pricing.contact if pricing else ''}}" placeholder="Telegram / WhatsApp"></label>
+          <input name="contact" value="{{pricing.contact if pricing else ''}}" placeholder="Telegram username"></label>
       </div>
       <div id="plans">
       {% if pricing and pricing.plans %}
@@ -188,7 +217,7 @@
           <input name="p_name" value="{{p.name}}" placeholder="Plan" style="max-width:140px">
           <input name="p_duration" value="{{p.duration}}" placeholder="Duration" style="max-width:130px">
           <input name="p_price" value="{{p.price}}" placeholder="Price" style="max-width:90px">
-          <input name="p_features" value="{{p.features}}" placeholder="Features">
+          <input name="p_features" value="{{p.features}}" placeholder="Features" style="flex:1">
           <button type="button" class="btn btn-danger btn-sm" onclick="this.parentNode.remove()">×</button>
         </div>
       {% endfor %}
@@ -203,6 +232,31 @@
 </div>
 
 <script>
+// ==================== SEARCH FUNCTION ====================
+function filterUsers(query) {
+    query = query.toLowerCase().trim();
+    const rows = document.querySelectorAll('#users-table tbody tr');
+    let visibleCount = 0;
+    
+    rows.forEach(row => {
+        const username = row.dataset.username || '';
+        const email = row.dataset.email || '';
+        const subscription = row.dataset.subscription || '';
+        
+        const match = !query || 
+            username.includes(query) || 
+            email.includes(query) || 
+            subscription.includes(query);
+        
+        row.style.display = match ? '' : 'none';
+        if (match) visibleCount++;
+    });
+    
+    document.getElementById('visible-users').textContent = visibleCount;
+    document.getElementById('no-results').style.display = visibleCount === 0 ? 'block' : 'none';
+}
+
+// ==================== PLAN EDITOR ====================
 function addPlan() {
   const d = document.createElement('div');
   d.className = 'row';
@@ -210,11 +264,12 @@ function addPlan() {
   d.innerHTML = `<input name="p_name" placeholder="Plan" style="max-width:140px">
     <input name="p_duration" placeholder="Duration" style="max-width:130px">
     <input name="p_price" placeholder="Price" style="max-width:90px">
-    <input name="p_features" placeholder="Features">
+    <input name="p_features" placeholder="Features" style="flex:1">
     <button type="button" class="btn btn-danger btn-sm" onclick="this.parentNode.remove()">×</button>`;
   document.getElementById('plans').appendChild(d);
 }
 
+// ==================== BACKUP STATUS ====================
 async function checkBackupStatus() {
   const div = document.getElementById('backup-status-display');
   div.innerHTML = '<p class="muted">Loading...</p>';
@@ -227,27 +282,6 @@ async function checkBackupStatus() {
       <p class="muted">📁 Repo: ${data.repo_owner || 'N/A'}/${data.repo_name || 'N/A'}</p>
       ${data.last_error ? `<p style="color:#fca5a5">❌ Error: ${data.last_error}</p>` : ''}
     `;
-  } catch(e) {
-    div.innerHTML = `<p style="color:#fca5a5">❌ Error: ${e.message}</p>`;
-  }
-}
-
-async function fetchBlockedIPs() {
-  const div = document.getElementById('blocked-ips-list');
-  div.innerHTML = '<p class="muted">Loading...</p>';
-  try {
-    const r = await fetch('/admin/blocked-ips');
-    const data = await r.json();
-    if (data.blocked_ips && data.blocked_ips.length > 0) {
-      div.innerHTML = data.blocked_ips.map(ip => `
-        <div style="display:flex;justify-content:space-between;padding:6px 10px;background:rgba(239,68,68,0.1);border-radius:6px;margin-bottom:4px;border:1px solid rgba(239,68,68,0.2)">
-          <span><code style="color:#fca5a5">${ip.ip}</code> ${ip.reason ? `- ${ip.reason}` : ''}</span>
-          <span class="muted" style="font-size:11px">${ip.expires || 'Permanent'}</span>
-        </div>
-      `).join('');
-    } else {
-      div.innerHTML = '<p style="color:#6ee7b7">✅ No IPs blocked.</p>';
-    }
   } catch(e) {
     div.innerHTML = `<p style="color:#fca5a5">❌ Error: ${e.message}</p>`;
   }

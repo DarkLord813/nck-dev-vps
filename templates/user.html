@@ -35,8 +35,6 @@
         <p class="muted" style="margin:5px 0 0">You need to subscribe to a plan to upload files, run scripts, and install modules on NCK Dev VPS.</p>
         {% if email %}
           <p class="muted" style="margin:5px 0 0">📧 Email: <strong>{{email}}</strong></p>
-        {% else %}
-          <p class="muted" style="margin:5px 0 0;color:#f59e0b">⚠️ No email found! Please contact the owner to add your email.</p>
         {% endif %}
       </div>
       <a href="/pricing" class="btn btn-primary">View Plans →</a>
@@ -284,19 +282,8 @@ async function deployProject() {
 
 // ==================== REQUIREMENTS STATUS ====================
 function loadRequirementsStatus() {
-    // This is handled by the form submit event below
+    // Handled by form submit
 }
-
-document.addEventListener('DOMContentLoaded', function() {
-    const reqForm = document.querySelector('form[action="/upload-requirements"]');
-    if (reqForm) {
-        reqForm.addEventListener('submit', function(e) {
-            const status = document.getElementById('requirements-status');
-            status.innerHTML = '⏳ Installing requirements...';
-            status.style.color = '#fbbf24';
-        });
-    }
-});
 
 // ==================== LOGS ====================
 const logBox = document.getElementById('logs');

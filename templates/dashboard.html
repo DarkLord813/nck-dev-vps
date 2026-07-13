@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — NCK Dev VPS{% endblock %}
+{% block body %}
+<div class="wrap">
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px">
+    <div style="width:48px;height:48px;border-radius:12px;background:var(--grad2);display:grid;place-items:center;font-size:22px">📊</div>
+    <div>
+      <h1 style="font-size:24px;margin:0">Welcome, {{ username }}!</h1>
+      <p class="muted" style="margin:0">
+        <span class="badge badge-subscription">📊 {{ subscription or 'Basic' }}</span>
+        {% if is_paid %}
+          <span class="badge badge-on">✅ Active</span>
+        {% else %}
+          <span class="badge badge-off">⏳ Pending</span>
+        {% endif %}
+      </p>
+    </div>
+  </div>
+  
+  {% if error %}
+    <div class="card" style="border:2px solid var(--danger);background:rgba(239,68,68,0.1)">
+      <p>⚠️ {{ error }}</p>
+    </div>
+  {% endif %}
+  
+  {% if has_projects %}
+    <div class="card">
+      <h2>📁 Your Project</h2>
+      <p><strong>Name:</strong> {{ project_name }}</p>
+      <p><strong>Type:</strong> {{ project_type }} ({{ project_framework }})</p>
+      <p><strong>Status:</strong> 
+        {% if project_is_running %}
+          <span class="badge badge-on">🟢 Running on port {{ project_port }}</span>
+        {% else %}
+          <span class="badge badge-off">🔴 Stopped</span>
+        {% endif %}
+      </p>
+      <p><strong>Files:</strong> {{ project_files|length }}</p>
+      <div style="margin-top: 15px;display:flex;gap:10px;flex-wrap:wrap">
+        <a href="/project/{{project_id}}" class="btn btn-primary">Manage Project</a>
+        <a href="/projects" class="btn btn-ghost">All Projects</a>
+      </div>
+    </div>
+  {% else %}
+    <div class="card" style="text-align:center;padding:40px;border:2px dashed var(--border)">
+      <div style="font-size:48px">📁</div>
+      <h2>No Projects Yet</h2>
+      <p class="muted">Upload your first project to get started!</p>
+      <a href="/project/create" class="btn btn-primary" style="margin-top:10px">Create Project</a>
+    </div>
+  {% endif %}
+  
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:18px">
+    <div class="card" style="text-align:center">
+      <div style="font-size:32px">➕</div>
+      <a href="/project/create" class="btn btn-primary" style="width:100%;justify-content:center">New Project</a>
+    </div>
+    <div class="card" style="text-align:center">
+      <div style="font-size:32px">💰</div>
+      <a href="/pricing" class="btn btn-ghost" style="width:100%;justify-content:center">View Plans</a>
+    </div>
+    <div class="card" style="text-align:center">
+      <div style="font-size:32px">💬</div>
+      <a href="https://t.me/rexoronsaye" target="_blank" class="btn btn-ghost" style="width:100%;justify-content:center">Contact Owner</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -3,7 +3,7 @@
 <div class="wrap">
   <section style="text-align:center;padding:30px 0">
     <h1>💎 <span class="gradient-text">Pricing</span> & Plans</h1>
-    <p class="muted">Choose a plan, subscribe, and start deploying your bots on NCK Dev VPS!</p>
+    <p class="muted">Choose a plan, contact the owner, and start deploying your bots on NCK Dev VPS!</p>
     {% if not session or not session.username %}
       <p class="muted" style="margin-top:10px">👉 <a href="/register" style="color:var(--primary);font-weight:600">Sign up first</a> then subscribe to a plan</p>
     {% endif %}
@@ -17,25 +17,27 @@
       <option value="USD">🇺🇸 USD ($)</option>
       <option value="EUR">🇪🇺 EUR (€)</option>
       <option value="GBP">🇬🇧 GBP (£)</option>
+      <option value="TON">💎 TON (⧫)</option>
     </select>
   </div>
   
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px">
     {% for p in pricing.plans %}
     <div class="card" style="text-align:center;{% if loop.index == 2 %}border:1px solid rgba(99,102,241,0.5);box-shadow:0 10px 40px rgba(99,102,241,0.25){% endif %}">
       {% if loop.index == 2 %}<div class="badge" style="background:var(--grad);color:#fff;margin-bottom:10px">⭐ POPULAR</div>{% endif %}
       {% if loop.index == 3 %}<div class="badge" style="background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;margin-bottom:10px">🏆 BEST VALUE</div>{% endif %}
       <h3>{{p.name}}</h3>
-      <div style="font-size:40px;font-weight:800;margin:12px 0" class="gradient-text" id="price-{{p.name}}">₦{{p.price}}</div>
+      <div style="font-size:40px;font-weight:800;margin:12px 0" class="gradient-text" id="price-{{p.name}}">{{pricing.currency}}{{p.price}}</div>
       <div class="muted" style="margin-bottom:16px">{{p.duration}}</div>
       <div style="font-size:14px;color:#c7cce8;min-height:70px">{{p.features}}</div>
       
       {% if session and session.username %}
         {% set user_info = users.get(session.username) if users else None %}
         {% set user_email = user_info.email if user_info else '' %}
+        {% set user_currency = user_info.currency if user_info else 'NGN' %}
         <button class="btn btn-primary" style="margin-top:14px;width:100%;justify-content:center" 
-                onclick="payWithFlutterwave('{{session.username}}', '{{p.name}}', '{{user_email}}', document.getElementById('currency-selector').value)">
-          💳 Subscribe Now
+                onclick="contactOwner('{{p.name}}', '{{p.price}}', '{{p.duration}}', '{{session.username}}', '{{user_email}}', document.getElementById('currency-selector').value)">
+          💬 Contact Owner to Buy
         </button>
       {% else %}
         <a href="/register" class="btn btn-primary" style="margin-top:14px;width:100%;justify-content:center">
@@ -46,84 +48,87 @@
     {% endfor %}
   </div>
   
+  <!-- Payment Methods -->
+  <div class="card" style="margin-top:24px;border:2px solid var(--primary)">
+    <h2>💳 Payment Methods</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px">
+      <div style="text-align:center;padding:14px;background:rgba(10,14,32,0.3);border-radius:10px;border:1px solid var(--border)">
+        <div style="font-size:32px">🏦</div>
+        <h3 style="margin:6px 0">Bank Transfer</h3>
+        <p class="muted" style="font-size:12px">GTBank<br>0123456789<br>NCK Dev VPS</p>
+        <span class="badge badge-currency">🇳🇬 NGN Only</span>
+      </div>
+      <div style="text-align:center;padding:14px;background:rgba(10,14,32,0.3);border-radius:10px;border:1px solid var(--border)">
+        <div style="font-size:32px">💎</div>
+        <h3 style="margin:6px 0">TON</h3>
+        <p class="muted" style="font-size:12px">Telegram Open Network<br>Wallet: EQD...</p>
+        <span class="badge badge-currency">🌍 All Currencies</span>
+      </div>
+      <div style="text-align:center;padding:14px;background:rgba(10,14,32,0.3);border-radius:10px;border:1px solid var(--border)">
+        <div style="font-size:32px">🎁</div>
+        <h3 style="margin:6px 0">Gift Cards</h3>
+        <p class="muted" style="font-size:12px">Amazon, Steam, Google Play,<br>Apple, PlayStation, Xbox</p>
+        <span class="badge badge-currency">🌍 All Currencies</span>
+      </div>
+    </div>
+  </div>
+  
+  <div class="card" style="margin-top:16px;text-align:center;border:2px solid var(--border)">
+    <h3>💱 Currencies Accepted</h3>
+    <div style="display:flex;justify-content:center;gap:14px;flex-wrap:wrap">
+      <span class="badge badge-currency">🇳🇬 NGN (₦)</span>
+      <span class="badge badge-currency">🇺🇸 USD ($)</span>
+      <span class="badge badge-currency">🇪🇺 EUR (€)</span>
+      <span class="badge badge-currency">🇬🇧 GBP (£)</span>
+      <span class="badge badge-currency">💎 TON (⧫)</span>
+    </div>
+  </div>
+  
   {% if pricing.contact %}
-  <div class="card" style="margin-top:24px;text-align:center">
-    <h3>💬 Need Help?</h3>
-    <p class="muted">Contact the owner for support or custom plans:</p>
-    <p style="font-size:18px;font-weight:600">{{pricing.contact}}</p>
+  <div class="card" style="margin-top:16px;text-align:center">
+    <h3>💬 Contact Owner</h3>
+    <p class="muted">For support or custom plans, contact:</p>
+    <a href="https://t.me/rexoronsaye" class="btn btn-primary" target="_blank" style="margin-top:8px">
+      📱 {{pricing.contact}} on Telegram
+    </a>
   </div>
   {% endif %}
 </div>
 
 <script>
-// Multi-currency pricing data
-const currencyPrices = {
-    "NGN": {"Basic": "2500", "Pro": "15000", "Premium": "25000"},
-    "USD": {"Basic": "3.00", "Pro": "18.00", "Premium": "30.00"},
-    "EUR": {"Basic": "2.80", "Pro": "16.50", "Premium": "28.00"},
-    "GBP": {"Basic": "2.40", "Pro": "14.50", "Premium": "24.00"}
-};
-
+// Currency data
+const currencyPrices = {{ pricing.currency_pricing|tojson|safe }};
 const currencySymbols = {
     "NGN": "₦",
     "USD": "$",
     "EUR": "€",
-    "GBP": "£"
+    "GBP": "£",
+    "TON": "⧫"
 };
 
 function updatePrices(currency) {
     const symbol = currencySymbols[currency] || "₦";
     const prices = currencyPrices[currency] || currencyPrices["NGN"];
     
-    const basicEl = document.getElementById("price-Basic");
-    const proEl = document.getElementById("price-Pro");
-    const premiumEl = document.getElementById("price-Premium");
-    
-    if (basicEl) basicEl.textContent = `${symbol}${prices["Basic"]}`;
-    if (proEl) proEl.textContent = `${symbol}${prices["Pro"]}`;
-    if (premiumEl) premiumEl.textContent = `${symbol}${prices["Premium"]}`;
+    document.querySelectorAll('.card h3').forEach((el, index) => {
+        const planName = el.textContent.trim();
+        if (prices[planName]) {
+            const priceEl = document.getElementById('price-' + planName);
+            if (priceEl) {
+                priceEl.textContent = symbol + prices[planName];
+            }
+        }
+    });
 }
 
-async function payWithFlutterwave(username, planName, email, currency) {
-    // If no email, prompt the user to enter it
-    if (!email || email === '') {
-        const userEmail = prompt('Please enter your email address for payment:');
-        if (!userEmail || !userEmail.includes('@')) {
-            alert('Please enter a valid email address.');
-            return;
-        }
-        email = userEmail;
-    }
+function contactOwner(planName, price, duration, username, email, currency) {
+    const symbol = currencySymbols[currency] || "₦";
+    const prices = currencyPrices[currency] || currencyPrices["NGN"];
+    const actualPrice = prices[planName] || price;
     
-    try {
-        const response = await fetch('/initialize-payment', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                username: username,
-                plan_name: planName,
-                email: email,
-                currency: currency || 'NGN'
-            }),
-        });
-        
-        const result = await response.json();
-        
-        if (result.error) {
-            alert('Error: ' + result.error);
-            return;
-        }
-        
-        if (result.status) {
-            window.location.href = result.link;
-        } else {
-            alert('Payment failed: ' + (result.error || 'Unknown error'));
-        }
-    } catch (error) {
-        alert('Payment error: ' + error.message);
-    }
+    const message = `Hi I want to subscribe to the ${planName} plan for ${symbol}${actualPrice} ${duration}%0A%0A👤 Username: ${username}%0A📧 Email: ${email}%0A📋 Plan: ${planName}%0A💰 Price: ${symbol}${actualPrice}%0A📅 Duration: ${duration}%0A💱 Currency: ${currency}%0A%0A📤 Please send payment details and I'll activate my account ASAP!`;
+    
+    window.open(`https://t.me/rexoronsaye?text=${message}`, '_blank');
 }
 </script>
 {% endblock %}
