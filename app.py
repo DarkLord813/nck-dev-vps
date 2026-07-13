@@ -17,8 +17,6 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
-import ipaddress
-import hmac
 import logging
 from logging.handlers import RotatingFileHandler
 
@@ -27,32 +25,74 @@ DATA_DIR = APP_DIR / "data"
 USERS_FILE = DATA_DIR / "users.json"
 PRICING_FILE = DATA_DIR / "pricing.json"
 PROJECTS_FILE = DATA_DIR / "projects.json"
+PAYMENTS_FILE = DATA_DIR / "payments.json"
 FILES_ROOT = APP_DIR / "user_files"
 DATA_DIR.mkdir(exist_ok=True)
 FILES_ROOT.mkdir(exist_ok=True)
 
-OWNER_USER = "DarkLord813"
-OWNER_PASS = "DarkLord813"
+OWNER_USER = os.environ.get("OWNER_USERNAME", "DarkLord813")
+OWNER_PASS = os.environ.get("OWNER_PASSWORD", "DarkLord813")
 
-# Flutterwave Configuration
-FLW_PUBLIC_KEY = os.environ.get("FLW_PUBLIC_KEY", "")
-FLW_SECRET_KEY = os.environ.get("FLW_SECRET_KEY", "")
-FLW_ENCRYPTION_KEY = os.environ.get("FLW_ENCRYPTION_KEY", "")
-FLW_ENABLED = bool(FLW_PUBLIC_KEY and FLW_SECRET_KEY and FLW_ENCRYPTION_KEY)
+# Telegram Configuration
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 
-FLW_INITIALIZE_URL = "https://api.flutterwave.com/v3/payments"
-FLW_VERIFY_URL = "https://api.flutterwave.com/v3/transactions/"
+# TON Payment Configuration
+TON_WALLET = os.environ.get("TON_WALLET", "EQD...")
 
+# ==================== MULTI-CURRENCY CONFIGURATION ====================
 SUPPORTED_CURRENCIES = {
-    "NGN": {"symbol": "₦", "name": "Nigerian Naira", "country": "Nigeria", "flag": "🇳🇬"},
-    "USD": {"symbol": "$", "name": "US Dollar", "country": "United States", "flag": "🇺🇸"},
-    "EUR": {"symbol": "€", "name": "Euro", "country": "Europe", "flag": "🇪🇺"},
-    "GBP": {"symbol": "£", "name": "British Pound", "country": "United Kingdom", "flag": "🇬🇧"},
+    "NGN": {
+        "symbol": "₦",
+        "name": "Nigerian Naira",
+        "country": "Nigeria",
+        "flag": "🇳🇬",
+        "exchange_rate": 1.0,  # Base currency
+        "ton_price": 0.015,    # Price in TON
+        "gift_card_options": ["Amazon", "Steam", "Google Play", "Apple", "PlayStation", "Xbox"]
+    },
+    "USD": {
+        "symbol": "$",
+        "name": "US Dollar",
+        "country": "United States",
+        "flag": "🇺🇸",
+        "exchange_rate": 0.0016,  # 1 NGN = 0.0016 USD
+        "ton_price": 0.0025,      # Price in TON (approx $0.0025 per TON)
+        "gift_card_options": ["Amazon", "Steam", "Google Play", "Apple", "PlayStation", "Xbox", "Best Buy", "Target"]
+    },
+    "EUR": {
+        "symbol": "€",
+        "name": "Euro",
+        "country": "Europe",
+        "flag": "🇪🇺",
+        "exchange_rate": 0.0015,  # 1 NGN = 0.0015 EUR
+        "ton_price": 0.0023,      # Price in TON
+        "gift_card_options": ["Amazon", "Steam", "Google Play", "Apple", "PlayStation"]
+    },
+    "GBP": {
+        "symbol": "£",
+        "name": "British Pound",
+        "country": "United Kingdom",
+        "flag": "🇬🇧",
+        "exchange_rate": 0.0013,  # 1 NGN = 0.0013 GBP
+        "ton_price": 0.0020,      # Price in TON
+        "gift_card_options": ["Amazon", "Steam", "Google Play", "Apple", "PlayStation"]
+    },
+    "TON": {
+        "symbol": "⧫",
+        "name": "TON Coin",
+        "country": "Global",
+        "flag": "💎",
+        "exchange_rate": 400.0,    # 1 TON = 400 NGN (approx)
+        "ton_price": 1.0,          # Price in TON (1 TON = 1 TON)
+        "gift_card_options": ["Amazon", "Steam", "Google Play", "Apple"]
+    }
 }
 
 DEFAULT_PRICING = {
     "currency": "NGN",
-    "contact": "Telegram: @rexoronsaye",
+    "contact": "@rexoronsaye",
     "plans": [
         {"name": "Basic", "duration": "Monthly", "price": "2500", "features": "1 project, 1GB RAM, 5GB storage, Basic support"},
         {"name": "Pro", "duration": "Yearly", "price": "15000", "features": "5 projects, 2GB RAM, 20GB storage, Priority support, Custom domains"},
@@ -60,294 +100,89 @@ DEFAULT_PRICING = {
     ],
     "currency_pricing": {
         "NGN": {"Basic": "2500", "Pro": "15000", "Premium": "25000"},
-        "USD": {"Basic": "3.00", "Pro": "18.00", "Premium": "30.00"},
-        "EUR": {"Basic": "2.80", "Pro": "16.50", "Premium": "28.00"},
-        "GBP": {"Basic": "2.40", "Pro": "14.50", "Premium": "24.00"},
+        "USD": {"Basic": "4.00", "Pro": "24.00", "Premium": "40.00"},
+        "EUR": {"Basic": "3.75", "Pro": "22.50", "Premium": "37.50"},
+        "GBP": {"Basic": "3.25", "Pro": "19.50", "Premium": "32.50"},
+        "TON": {"Basic": "6.25", "Pro": "37.50", "Premium": "62.50"}
     }
 }
 
-if not USERS_FILE.exists():
-    USERS_FILE.write_text("{}")
-if not PRICING_FILE.exists():
-    PRICING_FILE.write_text(json.dumps(DEFAULT_PRICING, indent=2))
-if not PROJECTS_FILE.exists():
-    PROJECTS_FILE.write_text("{}")
-
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
-app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
-
-# ==================== LOGGING ====================
-LOG_DIR = APP_DIR / "logs"
-LOG_DIR.mkdir(exist_ok=True)
-file_handler = RotatingFileHandler(LOG_DIR / "app.log", maxBytes=10485760, backupCount=10)
-file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
-file_handler.setLevel(logging.INFO)
-app.logger.addHandler(file_handler)
-app.logger.setLevel(logging.INFO)
-
-# ==================== GITHUB STORAGE SYSTEM ====================
-class GitHubStorage:
-    """Store and retrieve files from GitHub"""
-    
-    def __init__(self):
-        self.token = os.environ.get("GITHUB_TOKEN", "")
-        self.repo_owner = "DarkLord813"
-        self.repo_name = os.environ.get("GITHUB_REPO_NAME", "")
-        self.branch = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
-        self.is_enabled = bool(self.token and self.repo_owner and self.repo_name)
-        self._session = requests.Session()
-        self._cache = {}
-        self._cache_time = {}
-        self._cache_duration = 30  # seconds
-    
-    @property
-    def _headers(self):
-        return {
-            'Authorization': f'token {self.token}',
-            'Accept': 'application/vnd.github.v3+json'
+# ==================== PAYMENT METHODS CONFIGURATION ====================
+PAYMENT_METHODS = {
+    "bank_transfer": {
+        "name": "Nigerian Bank Transfer",
+        "icon": "🏦",
+        "enabled": True,
+        "currencies": ["NGN"],
+        "details": {
+            "bank": "GTBank",
+            "account_number": "0123456789",
+            "account_name": "NCK Dev VPS",
+            "bank_code": "058"
         }
-    
-    def _get_file_path(self, username, project_id, filename):
-        """Get GitHub path for a file"""
-        return f"user_files/{username}/{project_id}/{filename}"
-    
-    def _get_api_url(self, path):
-        """Get GitHub API URL for a file"""
-        return f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{path}"
-    
-    def save_file(self, username, project_id, filename, content, is_binary=False):
-        """Save a file to GitHub"""
-        if not self.is_enabled:
-            # Fallback to local storage
-            project_dir = FILES_ROOT / username / project_id
-            project_dir.mkdir(parents=True, exist_ok=True)
-            filepath = project_dir / filename
-            if is_binary:
-                with open(filepath, 'wb') as f:
-                    f.write(content)
-            else:
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    f.write(content)
-            return True
-        
-        try:
-            path = self._get_file_path(username, project_id, filename)
-            api_url = self._get_api_url(path)
-            
-            # Encode content
-            if is_binary:
-                encoded = base64.b64encode(content).decode()
-            else:
-                encoded = base64.b64encode(content.encode('utf-8')).decode()
-            
-            # Check if file exists
-            r = self._session.get(api_url, headers=self._headers)
-            file_sha = r.json().get('sha') if r.status_code == 200 else None
-            
-            payload = {
-                'message': f"Save file: {filename} for {username}/{project_id}",
-                'content': encoded,
-                'branch': self.branch
-            }
-            if file_sha:
-                payload['sha'] = file_sha
-            
-            r = self._session.put(api_url, headers=self._headers, json=payload, timeout=60)
-            
-            if r.status_code in (200, 201):
-                # Clear cache
-                cache_key = f"{username}:{project_id}:{filename}"
-                self._cache.pop(cache_key, None)
-                self._cache_time.pop(cache_key, None)
-                return True
-            else:
-                app.logger.error(f"GitHub save error: {r.status_code} - {r.text}")
-                # Fallback to local
-                project_dir = FILES_ROOT / username / project_id
-                project_dir.mkdir(parents=True, exist_ok=True)
-                filepath = project_dir / filename
-                if is_binary:
-                    with open(filepath, 'wb') as f:
-                        f.write(content)
-                else:
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                return True
-                
-        except Exception as e:
-            app.logger.error(f"GitHub save exception: {e}")
-            # Fallback to local
-            project_dir = FILES_ROOT / username / project_id
-            project_dir.mkdir(parents=True, exist_ok=True)
-            filepath = project_dir / filename
-            if is_binary:
-                with open(filepath, 'wb') as f:
-                    f.write(content)
-            else:
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    f.write(content)
-            return True
-    
-    def get_file(self, username, project_id, filename):
-        """Get a file from GitHub"""
-        # Check cache first
-        cache_key = f"{username}:{project_id}:{filename}"
-        if cache_key in self._cache:
-            cache_time = self._cache_time.get(cache_key, 0)
-            if time.time() - cache_time < self._cache_duration:
-                return self._cache[cache_key]
-        
-        # Check local first
-        project_dir = FILES_ROOT / username / project_id
-        filepath = project_dir / filename
-        if filepath.exists():
-            try:
-                content = filepath.read_bytes()
-                self._cache[cache_key] = content
-                self._cache_time[cache_key] = time.time()
-                return content
-            except:
-                pass
-        
-        # Try GitHub
-        if self.is_enabled:
-            try:
-                path = self._get_file_path(username, project_id, filename)
-                api_url = self._get_api_url(path)
-                
-                r = self._session.get(api_url, headers=self._headers, timeout=30)
-                
-                if r.status_code == 200:
-                    data = r.json()
-                    content = base64.b64decode(data.get('content', ''))
-                    # Cache it
-                    self._cache[cache_key] = content
-                    self._cache_time[cache_key] = time.time()
-                    return content
-                elif r.status_code == 404:
-                    return None
-                else:
-                    app.logger.error(f"GitHub get error: {r.status_code}")
-                    return None
-            except Exception as e:
-                app.logger.error(f"GitHub get exception: {e}")
-                return None
-        
-        return None
-    
-    def delete_file(self, username, project_id, filename):
-        """Delete a file from GitHub"""
-        if not self.is_enabled:
-            project_dir = FILES_ROOT / username / project_id
-            filepath = project_dir / filename
-            if filepath.exists():
-                filepath.unlink()
-            return True
-        
-        try:
-            path = self._get_file_path(username, project_id, filename)
-            api_url = self._get_api_url(path)
-            
-            # Get file SHA first
-            r = self._session.get(api_url, headers=self._headers)
-            if r.status_code == 404:
-                # File doesn't exist
-                return True
-            if r.status_code != 200:
-                return False
-            
-            file_sha = r.json().get('sha')
-            if not file_sha:
-                return False
-            
-            payload = {
-                'message': f"Delete file: {filename} for {username}/{project_id}",
-                'sha': file_sha,
-                'branch': self.branch
-            }
-            
-            r = self._session.delete(api_url, headers=self._headers, json=payload, timeout=30)
-            
-            if r.status_code in (200, 204):
-                # Clear cache
-                cache_key = f"{username}:{project_id}:{filename}"
-                self._cache.pop(cache_key, None)
-                self._cache_time.pop(cache_key, None)
-                return True
-            else:
-                # Fallback to local delete
-                project_dir = FILES_ROOT / username / project_id
-                filepath = project_dir / filename
-                if filepath.exists():
-                    filepath.unlink()
-                return True
-                
-        except Exception as e:
-            app.logger.error(f"GitHub delete exception: {e}")
-            # Fallback to local delete
-            project_dir = FILES_ROOT / username / project_id
-            filepath = project_dir / filename
-            if filepath.exists():
-                filepath.unlink()
-            return True
-    
-    def list_files(self, username, project_id):
-        """List all files for a project"""
-        files = []
-        
-        # Check local first
-        project_dir = FILES_ROOT / username / project_id
-        if project_dir.exists():
-            for item in project_dir.iterdir():
-                if item.is_file():
-                    files.append(item.name)
-        
-        # If GitHub is enabled, also check there
-        if self.is_enabled:
-            try:
-                path = f"user_files/{username}/{project_id}"
-                api_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{path}"
-                
-                r = self._session.get(api_url, headers=self._headers, timeout=30)
-                if r.status_code == 200:
-                    data = r.json()
-                    for item in data:
-                        if item.get('type') == 'file':
-                            files.append(item.get('name'))
-                elif r.status_code != 404:
-                    app.logger.error(f"GitHub list error: {r.status_code}")
-            except Exception as e:
-                app.logger.error(f"GitHub list exception: {e}")
-        
-        # Remove duplicates and sort
-        return sorted(list(set(files)))
-    
-    def file_exists(self, username, project_id, filename):
-        """Check if a file exists"""
-        # Check cache
-        cache_key = f"{username}:{project_id}:{filename}"
-        if cache_key in self._cache:
-            return True
-        
-        # Check local
-        project_dir = FILES_ROOT / username / project_id
-        if (project_dir / filename).exists():
-            return True
-        
-        # Check GitHub
-        if self.is_enabled:
-            try:
-                path = self._get_file_path(username, project_id, filename)
-                api_url = self._get_api_url(path)
-                r = self._session.get(api_url, headers=self._headers, timeout=30)
-                return r.status_code == 200
-            except:
-                pass
-        
-        return False
+    },
+    "ton": {
+        "name": "TON (Telegram Open Network)",
+        "icon": "💎",
+        "enabled": True,
+        "currencies": ["TON", "NGN", "USD", "EUR", "GBP"],
+        "details": {
+            "wallet": TON_WALLET or "EQD...",
+            "network": "TON Mainnet"
+        }
+    },
+    "gift_card": {
+        "name": "Gift Cards",
+        "icon": "🎁",
+        "enabled": True,
+        "currencies": ["USD", "EUR", "GBP", "NGN", "TON"],
+        "details": {
+            "accepted": ["Amazon", "Steam", "Google Play", "Apple", "PlayStation", "Xbox", "Best Buy", "Target"],
+            "instructions": "Send gift card code via Telegram"
+        }
+    }
+}
 
-github_storage = GitHubStorage()
+# ==================== CONVERT PRICE FUNCTION ====================
+def convert_price(amount_ngn, target_currency):
+    """Convert price from NGN to target currency"""
+    if target_currency == "NGN":
+        return amount_ngn
+    
+    rate = SUPPORTED_CURRENCIES.get(target_currency, {}).get("exchange_rate", 1.0)
+    if target_currency == "TON":
+        ton_rate = SUPPORTED_CURRENCIES["TON"]["exchange_rate"]
+        return round(amount_ngn / ton_rate, 2)
+    
+    return round(amount_ngn * rate, 2)
+
+def format_price(amount, currency):
+    """Format price with currency symbol"""
+    symbol = SUPPORTED_CURRENCIES.get(currency, {}).get("symbol", "₦")
+    if currency == "TON":
+        return f"{symbol}{amount}"
+    return f"{symbol}{amount:,.2f}"
+
+def get_plan_price(plan_name, currency="NGN"):
+    """Get price for a plan in specified currency"""
+    pricing = load_pricing()
+    currency_pricing = pricing.get("currency_pricing", {})
+    
+    if currency in currency_pricing and plan_name in currency_pricing[currency]:
+        return float(currency_pricing[currency][plan_name])
+    
+    # Fallback to base currency
+    for plan in pricing.get("plans", []):
+        if plan["name"].lower() == plan_name.lower():
+            base_price = float(plan["price"])
+            return convert_price(base_price, currency)
+    
+    return 0
+
+def get_ton_price(plan_name):
+    """Get TON price for a plan"""
+    price_ngn = get_plan_price(plan_name, "NGN")
+    return convert_price(price_ngn, "TON")
 
 # ==================== GITHUB BACKUP SYSTEM ====================
 class GitHubBackupSystem:
@@ -355,7 +190,7 @@ class GitHubBackupSystem:
         self.data_dir = data_dir
         self.files_root = files_root
         self.token = os.environ.get("GITHUB_TOKEN", "")
-        self.repo_owner = "DarkLord813"
+        self.repo_owner = os.environ.get("GITHUB_REPO_OWNER", "DarkLord813")
         self.repo_name = os.environ.get("GITHUB_REPO_NAME", "")
         self.branch = os.environ.get("GITHUB_BACKUP_BRANCH", "main")
         self.backup_path = os.environ.get("GITHUB_BACKUP_PATH", "backups/database.json")
@@ -393,6 +228,7 @@ class GitHubBackupSystem:
             users_data = {}
             pricing_data = {}
             projects_data = {}
+            payments_data = {}
             
             if USERS_FILE.exists():
                 try:
@@ -415,15 +251,24 @@ class GitHubBackupSystem:
                 except:
                     pass
             
+            if PAYMENTS_FILE.exists():
+                try:
+                    with open(PAYMENTS_FILE, 'r') as f:
+                        payments_data = json.load(f)
+                except:
+                    pass
+            
             backup_data = {
                 "timestamp": datetime.now().isoformat(),
                 "version": "1.0",
                 "users": users_data,
                 "pricing": pricing_data,
                 "projects": projects_data,
+                "payments": payments_data,
                 "stats": {
                     "users_count": len(users_data),
                     "projects_count": sum(len(p) for p in projects_data.values()) if projects_data else 0,
+                    "payments_count": len(payments_data) if payments_data else 0,
                     "pricing_plans": len(pricing_data.get("plans", [])) if pricing_data else 0
                 }
             }
@@ -496,6 +341,11 @@ class GitHubBackupSystem:
                     json.dump(data["projects"], f, indent=2)
                 print(f"✅ Restored projects data")
             
+            if "payments" in data:
+                with open(PAYMENTS_FILE, 'w') as f:
+                    json.dump(data["payments"], f, indent=2)
+                print(f"✅ Restored {len(data['payments'])} payment records")
+            
             return True
             
         except Exception as e:
@@ -539,6 +389,26 @@ def get_backup_status():
     if github_backup:
         return github_backup.get_status()
     return {"enabled": False}
+
+# ==================== TELEGRAM NOTIFICATIONS ====================
+def send_telegram_notification(message):
+    """Send notification to Telegram"""
+    if not TELEGRAM_ENABLED:
+        print("⚠️ Telegram not configured")
+        return False
+    
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"❌ Telegram error: {e}")
+        return False
 
 # ==================== PORT MANAGEMENT ====================
 class PortManager:
@@ -641,7 +511,6 @@ class ProjectDeploymentEngine:
     
     @staticmethod
     def install_dependencies(project_dir, project_type):
-        """Install dependencies based on project type"""
         project_dir = Path(project_dir)
         results = []
         
@@ -815,16 +684,29 @@ def save_projects(projects):
         PROJECTS_FILE.write_text(json.dumps(projects, indent=2))
     threading.Thread(target=lambda: manual_backup("Projects data changed"), daemon=True).start()
 
+def load_payments():
+    if not PAYMENTS_FILE.exists():
+        return {}
+    try:
+        return json.loads(PAYMENTS_FILE.read_text())
+    except Exception:
+        return {}
+
+def save_payments(payments):
+    with _lock:
+        PAYMENTS_FILE.write_text(json.dumps(payments, indent=2))
+    threading.Thread(target=lambda: manual_backup("Payments data changed"), daemon=True).start()
+
 def update_project_files(username, project_id):
     try:
         projects = load_projects()
         if username in projects and project_id in projects[username]:
-            # Get files from GitHub storage
-            files = github_storage.list_files(username, project_id)
-            projects[username][project_id]["files"] = files
-            projects[username][project_id]["updated_at"] = time.time()
-            save_projects(projects)
-            return True
+            project_dir = FILES_ROOT / username / project_id
+            if project_dir.exists():
+                projects[username][project_id]["files"] = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
+                projects[username][project_id]["updated_at"] = time.time()
+                save_projects(projects)
+                return True
     except Exception as e:
         app.logger.error(f"Error updating project files: {str(e)}")
     return False
@@ -917,6 +799,9 @@ def create_project(username, project_name, description=""):
     }
     save_projects(projects)
     
+    project_dir = FILES_ROOT / username / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    
     threading.Thread(target=lambda: manual_backup(f"Project created: {project_name} by {username}"), daemon=True).start()
     
     return project_id
@@ -926,17 +811,9 @@ def delete_project(username, project_id):
     if username in projects and project_id in projects[username]:
         stop_project_process(username, project_id)
         port_manager.release_port(username, project_id)
-        
-        # Delete all files from GitHub
-        project = projects[username][project_id]
-        for filename in project.get("files", []):
-            github_storage.delete_file(username, project_id, filename)
-        
-        # Delete local files
         project_dir = FILES_ROOT / username / project_id
         if project_dir.exists():
             shutil.rmtree(project_dir, ignore_errors=True)
-        
         del projects[username][project_id]
         save_projects(projects)
         
@@ -950,16 +827,6 @@ def deploy_project_files(username, project_id):
         return False, "Project not found"
     
     project_dir = FILES_ROOT / username / project_id
-    project_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Download all files from GitHub to local
-    files = github_storage.list_files(username, project_id)
-    for filename in files:
-        content = github_storage.get_file(username, project_id, filename)
-        if content:
-            filepath = project_dir / filename
-            with open(filepath, 'wb') as f:
-                f.write(content)
     
     analysis = deployment_engine.analyze_project(project_dir)
     
@@ -977,7 +844,6 @@ def deploy_project_files(username, project_id):
         
         save_projects(projects)
     
-    # Install dependencies
     install_results = deployment_engine.install_dependencies(project_dir, analysis["project_type"])
     
     projects = load_projects()
@@ -1001,17 +867,6 @@ def start_project_process(username, project_id):
         return False, "Project not found"
     
     project_dir = FILES_ROOT / username / project_id
-    project_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Download files if not present
-    files = github_storage.list_files(username, project_id)
-    for filename in files:
-        content = github_storage.get_file(username, project_id, filename)
-        if content:
-            filepath = project_dir / filename
-            with open(filepath, 'wb') as f:
-                f.write(content)
-    
     run_command = project.get("run_command", "")
     
     if not run_command:
@@ -1181,13 +1036,12 @@ def landing():
     try:
         return render_template("landing.html",
             pricing=load_pricing(),
-            flw_key=FLW_PUBLIC_KEY,
-            flw_enabled=FLW_ENABLED,
+            payment_methods=PAYMENT_METHODS,
             currencies=SUPPORTED_CURRENCIES
         )
     except Exception as e:
         app.logger.error(f"Landing error: {e}")
-        return render_template("landing.html", pricing=DEFAULT_PRICING, error="Could not load pricing")
+        return render_template("landing.html", pricing=DEFAULT_PRICING, payment_methods=PAYMENT_METHODS, currencies=SUPPORTED_CURRENCIES, error="Could not load pricing")
 
 @app.route("/pricing")
 def pricing_page():
@@ -1196,55 +1050,65 @@ def pricing_page():
         pricing = load_pricing()
         return render_template("pricing.html",
             pricing=pricing,
-            flw_key=FLW_PUBLIC_KEY,
-            flw_enabled=FLW_ENABLED,
+            users=users,
+            session=session,
+            payment_methods=PAYMENT_METHODS,
             currencies=SUPPORTED_CURRENCIES,
-            users=users
+            convert_price=convert_price,
+            format_price=format_price,
+            get_plan_price=get_plan_price,
+            get_ton_price=get_ton_price
         )
     except Exception as e:
         app.logger.error(f"Pricing error: {e}")
         flash("Error loading pricing data", "error")
         return render_template("pricing.html", 
             pricing=DEFAULT_PRICING,
-            flw_key=FLW_PUBLIC_KEY,
-            flw_enabled=FLW_ENABLED,
-            currencies=SUPPORTED_CURRENCIES,
-            users={}
+            users={},
+            session=session,
+            payment_methods=PAYMENT_METHODS,
+            currencies=SUPPORTED_CURRENCIES
         )
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
+    pricing = load_pricing()
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         confirm_password = request.form.get("confirm_password", "")
         subscription = request.form.get("subscription", "Basic")
         email = request.form.get("email", "").strip()
+        currency = request.form.get("currency", "NGN")
         
         if not username or not password:
             flash("Username and password are required!", "error")
-            return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
+            return render_template("register.html", pricing=pricing, currencies=SUPPORTED_CURRENCIES)
         
         if len(username) < 3:
             flash("Username must be at least 3 characters!", "error")
-            return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
+            return render_template("register.html", pricing=pricing, currencies=SUPPORTED_CURRENCIES)
         
         if password != confirm_password:
             flash("Passwords don't match!", "error")
-            return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
+            return render_template("register.html", pricing=pricing, currencies=SUPPORTED_CURRENCIES)
         
         if len(password) < 6:
             flash("Password must be at least 6 characters!", "error")
-            return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
+            return render_template("register.html", pricing=pricing, currencies=SUPPORTED_CURRENCIES)
         
         users = load_users()
         if username in users:
             flash("Username already exists!", "error")
-            return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
+            return render_template("register.html", pricing=pricing, currencies=SUPPORTED_CURRENCIES)
         
         if username == OWNER_USER:
             flash("This username is reserved!", "error")
-            return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
+            return render_template("register.html", pricing=pricing, currencies=SUPPORTED_CURRENCIES)
+        
+        # Get plan price in selected currency
+        plan_price = get_plan_price(subscription, currency)
+        plan_price_formatted = format_price(plan_price, currency)
         
         users[username] = {
             "password": generate_password_hash(password),
@@ -1254,13 +1118,37 @@ def register():
             "payment_status": "pending",
             "email": email,
             "banned": False,
+            "currency": currency
         }
         save_users(users)
+        user_dir(username)
         
-        flash("Account created successfully! Please login.", "success")
+        # Send Telegram notification
+        if TELEGRAM_ENABLED:
+            message = f"""
+🆕 <b>NEW USER REGISTRATION!</b>
+
+👤 Username: {username}
+📧 Email: {email}
+📋 Plan: {subscription}
+💰 Price: {plan_price_formatted}
+💱 Currency: {currency}
+
+🔗 Auto-login link:
+{request.host_url}auto/{users[username]['token']}
+
+👑 Owner actions:
+• Login: {request.host_url}login
+• Dashboard: {request.host_url}owner
+
+📊 Status: ⏳ Payment Pending
+"""
+            send_telegram_notification(message)
+        
+        flash("Account created successfully! Please contact the owner to complete payment.", "success")
         return redirect(url_for("login"))
     
-    return render_template("register.html", pricing=load_pricing(), currencies=SUPPORTED_CURRENCIES)
+    return render_template("register.html", pricing=pricing, currencies=SUPPORTED_CURRENCIES)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -1306,146 +1194,9 @@ def auto_login(token):
             session.clear()
             session["role"] = "user"
             session["username"] = uname
+            flash("Auto-login successful!", "success")
             return redirect(url_for("user_dashboard"))
     return "Invalid link", 404
-
-# ==================== FLUTTERWAVE PAYMENT ROUTES ====================
-
-@app.route("/initialize-payment", methods=["POST"])
-def initialize_payment():
-    if not FLW_ENABLED:
-        return jsonify({"error": "Flutterwave is not configured."}), 400
-    
-    try:
-        data = request.json
-        username = data.get("username")
-        plan_name = data.get("plan_name")
-        email = data.get("email")
-        currency = data.get("currency", "NGN")
-        
-        print(f"💰 Payment request: username={username}, plan={plan_name}, email={email}, currency={currency}")
-        
-        if not email:
-            users = load_users()
-            user_data = users.get(username, {})
-            email = user_data.get("email", "")
-            if not email:
-                return jsonify({"error": "Email is required for payment."}), 400
-        
-        if currency not in SUPPORTED_CURRENCIES:
-            return jsonify({"error": f"Currency {currency} is not supported."}), 400
-        
-        pricing = load_pricing()
-        
-        plan = None
-        for p in pricing["plans"]:
-            if p["name"].lower() == plan_name.lower():
-                plan = p
-                break
-        
-        if not plan:
-            return jsonify({"error": f"Plan '{plan_name}' not found"}), 400
-        
-        currency_pricing = pricing.get("currency_pricing", {})
-        if currency in currency_pricing and plan_name in currency_pricing[currency]:
-            amount = float(currency_pricing[currency][plan_name])
-        else:
-            amount = float(plan["price"])
-        
-        tx_ref = f"VPS-{username}-{int(time.time())}-{secrets.token_hex(4)}"
-        
-        headers = {
-            "Authorization": f"Bearer {FLW_SECRET_KEY}",
-            "Content-Type": "application/json"
-        }
-        if FLW_ENCRYPTION_KEY:
-            headers["Encryption-Key"] = FLW_ENCRYPTION_KEY
-        
-        payload = {
-            "tx_ref": tx_ref,
-            "amount": amount,
-            "currency": currency,
-            "redirect_url": request.host_url.rstrip('/') + "/payment-verify",
-            "payment_options": "card,ussd,banktransfer,mobilemoney",
-            "customer": {"email": email, "name": username},
-            "customizations": {
-                "title": "NCK Dev VPS Subscription",
-                "description": f"{plan_name} Plan - {plan['duration']} ({currency})",
-            },
-            "meta": {
-                "username": username,
-                "plan": plan_name,
-                "currency": currency
-            }
-        }
-        
-        print(f"💰 Sending to Flutterwave: {payload}")
-        
-        response = requests.post(FLW_INITIALIZE_URL, json=payload, headers=headers, timeout=30)
-        result = response.json()
-        
-        print(f"💰 Flutterwave response: {result}")
-        
-        if result.get("status") == "success":
-            return jsonify({
-                "status": True,
-                "link": result["data"]["link"],
-                "reference": result["data"]["tx_ref"],
-                "amount": amount,
-                "currency": currency
-            })
-        else:
-            error_msg = result.get("message", "Payment initialization failed")
-            print(f"❌ Flutterwave error: {error_msg}")
-            return jsonify({"error": error_msg}), 400
-            
-    except Exception as e:
-        print(f"❌ Payment error: {e}")
-        return jsonify({"error": str(e)}), 400
-
-@app.route("/payment-verify")
-def payment_verify():
-    tx_ref = request.args.get("tx_ref")
-    if not tx_ref:
-        flash("No transaction reference found!", "error")
-        return redirect(url_for("pricing_page"))
-    
-    try:
-        headers = {"Authorization": f"Bearer {FLW_SECRET_KEY}", "Content-Type": "application/json"}
-        if FLW_ENCRYPTION_KEY:
-            headers["Encryption-Key"] = FLW_ENCRYPTION_KEY
-        
-        response = requests.get(f"{FLW_VERIFY_URL}{tx_ref}/verify", headers=headers)
-        result = response.json()
-        
-        if result.get("status") == "success" and result.get("data", {}).get("status") == "successful":
-            metadata = result["data"].get("meta", {})
-            username = metadata.get("username")
-            plan = metadata.get("plan")
-            currency = metadata.get("currency", "NGN")
-            
-            users = load_users()
-            if username in users:
-                users[username]["payment_status"] = "paid"
-                users[username]["subscription"] = plan
-                users[username]["payment_reference"] = tx_ref
-                users[username]["payment_amount"] = result["data"].get("amount")
-                users[username]["payment_currency"] = currency
-                save_users(users)
-                flash(f"Payment successful! Your {plan} subscription is now active. 🎉", "success")
-            else:
-                flash("User not found!", "error")
-        else:
-            flash("Payment verification failed. Please contact support.", "error")
-    except Exception as e:
-        flash(f"Error verifying payment: {str(e)}", "error")
-    
-    return redirect(url_for("login"))
-
-@app.route("/payment-cancel")
-def payment_cancel():
-    flash("Payment cancelled. You can try again anytime.", "error")
-    return redirect(url_for("pricing_page"))
 
 # ==================== USER DASHBOARD ROUTES ====================
 
@@ -1482,7 +1233,9 @@ def user_dashboard():
             project_type = project.get("project_type", "unknown")
             project_framework = project.get("framework", "unknown")
             project_deployment_status = project.get("deployment_status", "not_deployed")
-            project_has_files = len(project_files) > 0
+            
+            project_dir = FILES_ROOT / u / project_id
+            project_has_files = project_dir.exists() and any(project_dir.iterdir())
         
         return render_template("user.html",
             username=u,
@@ -1550,17 +1303,9 @@ def upload():
             if f and f.filename:
                 name = secure_filename(f.filename)
                 if name:
-                    content = f.read()
-                    
-                    # Save to GitHub storage
-                    github_storage.save_file(u, project_id, name, content, is_binary=True)
-                    
-                    # Also save locally for deployment
                     file_path = project_dir / name
-                    with open(file_path, 'wb') as out:
-                        out.write(content)
+                    f.save(file_path)
                     
-                    # Check if it's a zip/tar file
                     if name.endswith('.zip') or name.endswith('.tar.gz') or name.endswith('.tgz') or name.endswith('.tar'):
                         try:
                             if name.endswith('.zip'):
@@ -1573,41 +1318,14 @@ def upload():
                                 else:
                                     with tarfile.open(file_path, 'r') as tar_ref:
                                         tar_ref.extractall(project_dir)
-                            
-                            # Upload extracted files to GitHub
-                            for extracted in project_dir.iterdir():
-                                if extracted.is_file() and extracted.name != name:
-                                    with open(extracted, 'rb') as ef:
-                                        github_storage.save_file(u, project_id, extracted.name, ef.read(), is_binary=True)
-                            
                             os.remove(file_path)
                             extracted_count += 1
-                            flash(f"📦 Extracted {name}!", "success")
                         except Exception as e:
                             flash(f"❌ Failed to extract {name}: {str(e)}", "error")
                     else:
                         uploaded_count += 1
         
         if uploaded_count > 0 or extracted_count > 0:
-            # Install dependencies if requirements.txt exists
-            req_file = project_dir / "requirements.txt"
-            if req_file.exists():
-                try:
-                    flash("📦 Installing dependencies from requirements.txt...", "info")
-                    result = subprocess.run(
-                        ['pip', 'install', '-r', str(req_file)],
-                        cwd=str(project_dir),
-                        capture_output=True,
-                        text=True,
-                        timeout=300
-                    )
-                    if result.returncode == 0:
-                        flash("✅ Dependencies installed successfully!", "success")
-                    else:
-                        flash(f"⚠️ Some packages failed to install: {result.stderr[:200]}", "warning")
-                except Exception as e:
-                    flash(f"❌ Error installing dependencies: {str(e)}", "error")
-            
             success, results = deploy_project_files(u, project_id)
             if success:
                 flash(f"✅ {uploaded_count} files uploaded, {extracted_count} archives extracted, project deployed!", "success")
@@ -1649,7 +1367,6 @@ def upload_requirements():
             return redirect(url_for("user_dashboard"))
         
         project_dir = FILES_ROOT / u / project_id
-        project_dir.mkdir(parents=True, exist_ok=True)
         
         if 'requirements' not in request.files:
             flash("No file uploaded!", "error")
@@ -1661,21 +1378,11 @@ def upload_requirements():
             return redirect(url_for("user_dashboard"))
         
         name = secure_filename(file.filename)
-        content = file.read()
+        file.save(project_dir / name)
         
-        # Save to GitHub storage
-        github_storage.save_file(u, project_id, name, content.decode('utf-8'), is_binary=False)
-        
-        # Save locally
-        file_path = project_dir / name
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content.decode('utf-8'))
-        
-        # Install requirements
         try:
-            flash("📦 Installing dependencies from requirements.txt...", "info")
             result = subprocess.run(
-                ['pip', 'install', '-r', str(file_path)],
+                ['pip', 'install', '-r', str(project_dir / name)],
                 cwd=str(project_dir),
                 capture_output=True,
                 text=True,
@@ -1715,21 +1422,6 @@ def deploy_project():
             return jsonify({"success": False, "error": "No project found!"}), 400
         
         project_id = list(projects.keys())[0]
-        
-        # Install dependencies first
-        project_dir = FILES_ROOT / u / project_id
-        req_file = project_dir / "requirements.txt"
-        if req_file.exists():
-            try:
-                subprocess.run(
-                    ['pip', 'install', '-r', str(req_file)],
-                    cwd=str(project_dir),
-                    capture_output=True,
-                    timeout=300
-                )
-            except:
-                pass
-        
         success, results = deploy_project_files(u, project_id)
         
         if success:
@@ -1773,31 +1465,13 @@ def get_env_vars():
         if not project_id:
             return jsonify({"env_vars": []})
         
-        # Check if .env exists in GitHub
-        env_content = github_storage.get_file(u, project_id, ".env")
-        env_vars = []
-        
-        if env_content:
-            try:
-                content_str = env_content.decode('utf-8')
-                for line in content_str.split('\n'):
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        if '=' in line:
-                            key, value = line.split('=', 1)
-                            env_vars.append({"key": key.strip(), "value": value.strip()})
-            except:
-                pass
-        
         project = get_project(u, project_id)
-        if project and project.get("env_vars"):
-            # Merge with stored env vars
-            stored = project.get("env_vars", {})
-            for key, value in stored.items():
-                if not any(e["key"] == key for e in env_vars):
-                    env_vars.append({"key": key, "value": value})
+        if project:
+            env_vars = project.get("env_vars", {})
+            env_list = [{"key": k, "value": v} for k, v in env_vars.items()]
+            return jsonify({"env_vars": env_list})
         
-        return jsonify({"env_vars": env_vars})
+        return jsonify({"env_vars": []})
     except Exception as e:
         app.logger.error(f"Get env vars error: {e}")
         return jsonify({"env_vars": []})
@@ -1816,16 +1490,6 @@ def save_env_vars():
         data = request.json
         env_vars = data.get("env_vars", [])
         
-        # Create .env content
-        env_content = ""
-        for env in env_vars:
-            if env.get("key") and env.get("value"):
-                env_content += f"{env['key']}={env['value']}\n"
-        
-        # Save to GitHub
-        github_storage.save_file(u, project_id, ".env", env_content, is_binary=False)
-        
-        # Update project
         env_dict = {}
         for env in env_vars:
             if env.get("key") and env.get("value"):
@@ -1835,6 +1499,15 @@ def save_env_vars():
         if u in projects and project_id in projects[u]:
             projects[u][project_id]["env_vars"] = env_dict
             save_projects(projects)
+            
+            project_dir = FILES_ROOT / u / project_id
+            env_file = project_dir / ".env"
+            try:
+                with open(env_file, 'w') as f:
+                    for key, value in env_dict.items():
+                        f.write(f"{key}={value}\n")
+            except Exception as e:
+                return jsonify({"success": False, "error": f"Failed to save .env: {str(e)}"}), 500
             
             threading.Thread(target=lambda: manual_backup(f"Environment variables saved for {project_id} by {u}"), daemon=True).start()
             return jsonify({"success": True})
@@ -1855,14 +1528,15 @@ def clear_env_vars():
         if not project_id:
             return jsonify({"success": False, "error": "No project found"}), 400
         
-        # Delete .env from GitHub
-        github_storage.delete_file(u, project_id, ".env")
-        
-        # Update project
         projects = load_projects()
         if u in projects and project_id in projects[u]:
             projects[u][project_id]["env_vars"] = {}
             save_projects(projects)
+            
+            project_dir = FILES_ROOT / u / project_id
+            env_file = project_dir / ".env"
+            if env_file.exists():
+                env_file.unlink()
             
             threading.Thread(target=lambda: manual_backup(f"Environment variables cleared for {project_id} by {u}"), daemon=True).start()
             return jsonify({"success": True})
@@ -1886,24 +1560,26 @@ def file_delete(name):
             return redirect(url_for("user_dashboard"))
         
         project_id = list(projects.keys())[0]
+        project_dir = FILES_ROOT / u / project_id
         safe_name = secure_filename(name)
         
         if not safe_name:
             flash("Invalid filename!", "error")
             return redirect(url_for("user_dashboard"))
         
-        # Delete from GitHub
-        github_storage.delete_file(u, project_id, safe_name)
-        
-        # Delete locally
-        project_dir = FILES_ROOT / u / project_id
         filepath = project_dir / safe_name
-        if filepath.exists():
-            filepath.unlink()
         
-        flash(f"File '{name}' deleted successfully!", "success")
-        update_project_files(u, project_id)
-        threading.Thread(target=lambda: manual_backup(f"File deleted: {name} by {u}"), daemon=True).start()
+        if filepath.exists() and filepath.is_file():
+            if safe_name in ['.env', 'requirements.txt', 'run_command.txt']:
+                flash(f"Cannot delete {safe_name}. Use the appropriate management interface.", "warning")
+                return redirect(url_for("user_dashboard"))
+            
+            filepath.unlink()
+            flash(f"File '{name}' deleted successfully!", "success")
+            update_project_files(u, project_id)
+            threading.Thread(target=lambda: manual_backup(f"File deleted: {name} by {u}"), daemon=True).start()
+        else:
+            flash("File not found!", "error")
     except Exception as e:
         app.logger.error(f"File delete error: {e}")
         flash(f"Error deleting file: {str(e)}", "error")
@@ -1922,32 +1598,20 @@ def file_view(name):
             return redirect(url_for("user_dashboard"))
         
         project_id = list(projects.keys())[0]
+        project_dir = FILES_ROOT / u / project_id
         safe_name = secure_filename(name)
         
         if not safe_name:
             flash("Invalid filename!", "error")
             return redirect(url_for("user_dashboard"))
         
-        # Try to get from GitHub
-        content = github_storage.get_file(u, project_id, safe_name)
-        
-        if content:
-            # Save locally temporarily
-            project_dir = FILES_ROOT / u / project_id
-            project_dir.mkdir(parents=True, exist_ok=True)
-            filepath = project_dir / safe_name
-            with open(filepath, 'wb') as f:
-                f.write(content)
-            return send_from_directory(project_dir, safe_name, as_attachment=False)
-        
-        # Try local
-        project_dir = FILES_ROOT / u / project_id
         filepath = project_dir / safe_name
-        if filepath.exists():
-            return send_from_directory(project_dir, safe_name, as_attachment=False)
         
-        flash("File not found!", "error")
-        return redirect(url_for("user_dashboard"))
+        if not filepath.exists() or not filepath.is_file():
+            flash("File not found!", "error")
+            return redirect(url_for("user_dashboard"))
+        
+        return send_from_directory(project_dir, safe_name, as_attachment=False)
     except Exception as e:
         app.logger.error(f"File view error: {e}")
         flash(f"Error viewing file: {str(e)}", "error")
@@ -1992,9 +1656,6 @@ def projects_list():
         u = current_user()
         projects = get_user_projects(u)
         for pid, project in projects.items():
-            # Update files from GitHub
-            files = github_storage.list_files(u, pid)
-            project["files"] = files
             project["is_running"] = is_project_running(u, pid)
             resources = get_project_resources(u, pid)
             project["cpu"] = resources["cpu"]
@@ -2052,18 +1713,18 @@ def project_detail(project_id):
             flash("Project not found!", "error")
             return redirect(url_for("projects_list"))
         
-        # Get files from GitHub
-        files = github_storage.list_files(u, project_id)
-        project["files"] = files
+        project_dir = FILES_ROOT / u / project_id
+        files = []
+        if project_dir.exists():
+            files = sorted([f.name for f in project_dir.iterdir() if f.is_file()])
         
+        project["files"] = files
         project["is_running"] = is_project_running(u, project_id)
         project["logs"] = get_project_logs(u, project_id, 100)
         resources = get_project_resources(u, project_id)
         project["cpu"] = resources["cpu"]
         project["ram_mb"] = resources["ram_mb"]
         
-        # Analyze project
-        project_dir = FILES_ROOT / u / project_id
         analysis = deployment_engine.analyze_project(project_dir)
         project["project_type"] = analysis.get("project_type", "unknown")
         project["framework"] = analysis.get("framework", "unknown")
@@ -2085,8 +1746,6 @@ def project_upload(project_id):
             return redirect(url_for("projects_list"))
         
         project_dir = FILES_ROOT / u / project_id
-        project_dir.mkdir(parents=True, exist_ok=True)
-        
         files = request.files.getlist("files")
         uploaded_count = 0
         extracted_count = 0
@@ -2098,15 +1757,8 @@ def project_upload(project_id):
             if not name:
                 continue
             
-            content = file.read()
-            
-            # Save to GitHub
-            github_storage.save_file(u, project_id, name, content, is_binary=True)
-            
-            # Save locally
             file_path = project_dir / name
-            with open(file_path, 'wb') as f:
-                f.write(content)
+            file.save(file_path)
             
             if name.endswith('.zip') or name.endswith('.tar.gz') or name.endswith('.tgz') or name.endswith('.tar'):
                 try:
@@ -2120,13 +1772,6 @@ def project_upload(project_id):
                         else:
                             with tarfile.open(file_path, 'r') as tar_ref:
                                 tar_ref.extractall(project_dir)
-                    
-                    # Upload extracted files to GitHub
-                    for extracted in project_dir.iterdir():
-                        if extracted.is_file() and extracted.name != name:
-                            with open(extracted, 'rb') as ef:
-                                github_storage.save_file(u, project_id, extracted.name, ef.read(), is_binary=True)
-                    
                     os.remove(file_path)
                     extracted_count += 1
                     flash(f"📦 Extracted {name}!", "success")
@@ -2137,19 +1782,6 @@ def project_upload(project_id):
                 flash(f"📄 Uploaded {name}", "success")
         
         if uploaded_count > 0 or extracted_count > 0:
-            # Install dependencies
-            req_file = project_dir / "requirements.txt"
-            if req_file.exists():
-                try:
-                    subprocess.run(
-                        ['pip', 'install', '-r', str(req_file)],
-                        cwd=str(project_dir),
-                        capture_output=True,
-                        timeout=300
-                    )
-                except:
-                    pass
-            
             success, results = deploy_project_files(u, project_id)
             if success:
                 flash(f"🚀 Project auto-deployed!", "success")
@@ -2178,17 +1810,19 @@ def project_file_delete(project_id, filename):
             flash("Invalid filename!", "error")
             return redirect(url_for("project_detail", project_id=project_id))
         
-        # Delete from GitHub
-        github_storage.delete_file(u, project_id, safe_name)
-        
-        # Delete locally
         filepath = project_dir / safe_name
-        if filepath.exists():
-            filepath.unlink()
         
-        flash(f"File '{filename}' deleted successfully!", "success")
-        update_project_files(u, project_id)
-        threading.Thread(target=lambda: manual_backup(f"File deleted: {filename} from project {project_id} by {u}"), daemon=True).start()
+        if filepath.exists() and filepath.is_file():
+            if safe_name in ['.env', 'requirements.txt', 'run_command.txt']:
+                flash(f"Cannot delete {safe_name}. Use the appropriate management interface.", "warning")
+                return redirect(url_for("project_detail", project_id=project_id))
+            
+            filepath.unlink()
+            flash(f"File '{filename}' deleted successfully!", "success")
+            update_project_files(u, project_id)
+            threading.Thread(target=lambda: manual_backup(f"File deleted: {filename} from project {project_id} by {u}"), daemon=True).start()
+        else:
+            flash("File not found!", "error")
     except Exception as e:
         app.logger.error(f"Project file delete error: {e}")
         flash(f"Error deleting file: {str(e)}", "error")
@@ -2471,13 +2105,23 @@ def owner_dashboard():
         total_projects = sum(len(p) for p in projects.values()) if projects else 0
         backup_info = get_backup_status()
         
+        # Calculate stats
+        paid_users = sum(1 for u in users.values() if u.get("payment_status") == "paid")
+        banned_users = sum(1 for u in users.values() if u.get("banned", False))
+        
         return render_template("owner.html",
             users=users,
             base_url=request.host_url.rstrip("/"),
             pricing=load_pricing(),
             currencies=SUPPORTED_CURRENCIES,
             backup_info=backup_info,
-            total_projects=total_projects
+            total_projects=total_projects,
+            paid_users=paid_users,
+            banned_users=banned_users,
+            payment_methods=PAYMENT_METHODS,
+            convert_price=convert_price,
+            format_price=format_price,
+            get_plan_price=get_plan_price
         )
     except Exception as e:
         app.logger.error(f"Owner dashboard error: {e}")
@@ -2492,6 +2136,7 @@ def owner_create():
         p = request.form.get("password", "").strip()
         subscription = request.form.get("subscription", "Basic")
         email = request.form.get("email", "").strip()
+        currency = request.form.get("currency", "NGN")
         
         if not u or not p:
             flash("Username and password are required!", "error")
@@ -2513,8 +2158,31 @@ def owner_create():
             "payment_status": "paid",
             "email": email,
             "banned": False,
+            "currency": currency
         }
         save_users(users)
+        user_dir(u)
+        
+        # Send Telegram notification
+        if TELEGRAM_ENABLED:
+            plan_price = get_plan_price(subscription, currency)
+            plan_price_formatted = format_price(plan_price, currency)
+            message = f"""
+👑 <b>OWNER CREATED USER</b>
+
+👤 Username: {u}
+📧 Email: {email}
+📋 Plan: {subscription}
+💰 Price: {plan_price_formatted}
+💱 Currency: {currency}
+
+🔗 Auto-login link:
+{request.host_url}auto/{users[u]['token']}
+
+✅ Account is PAID and ACTIVE
+"""
+            send_telegram_notification(message)
+        
         flash(f"User {u} created!", "success")
     except Exception as e:
         app.logger.error(f"Owner create error: {e}")
@@ -2618,14 +2286,54 @@ def owner_ban_all():
     
     return redirect(url_for("owner_dashboard"))
 
+@app.route("/owner/mark-paid/<username>", methods=["POST"])
+@require_owner
+def owner_mark_paid(username):
+    try:
+        users = load_users()
+        if username in users:
+            users[username]["payment_status"] = "paid"
+            save_users(users)
+            
+            # Send Telegram notification
+            if TELEGRAM_ENABLED:
+                user = users[username]
+                plan_price = get_plan_price(user.get("subscription", "Basic"), user.get("currency", "NGN"))
+                plan_price_formatted = format_price(plan_price, user.get("currency", "NGN"))
+                message = f"""
+✅ <b>PAYMENT CONFIRMED & ACCOUNT ACTIVATED</b>
+
+👤 Username: {username}
+📧 Email: {user.get("email", "N/A")}
+📋 Plan: {user.get("subscription", "Basic")}
+💰 Amount: {plan_price_formatted}
+💱 Currency: {user.get("currency", "NGN")}
+
+🔗 Auto-login link:
+{request.host_url}auto/{user['token']}
+
+🎉 Account is now ACTIVE!
+"""
+                send_telegram_notification(message)
+            
+            flash(f"✅ {username} marked as paid and activated!", "success")
+        else:
+            flash(f"❌ User {username} not found!", "error")
+    except Exception as e:
+        app.logger.error(f"Owner mark paid error: {e}")
+        flash(f"Error marking user as paid: {str(e)}", "error")
+    
+    return redirect(url_for("owner_dashboard"))
+
 @app.route("/owner/pricing", methods=["POST"])
 @require_owner
 def owner_pricing():
     try:
         pricing = load_pricing()
         pricing["currency"] = request.form.get("currency", "NGN")
-        pricing["contact"] = request.form.get("contact", "")
+        pricing["contact"] = request.form.get("contact", "@rexoronsaye")
         
+        # Update base plans
         plans = []
         names = request.form.getlist("p_name")
         durs = request.form.getlist("p_duration")
@@ -2641,8 +2349,24 @@ def owner_pricing():
                     "features": feats[i].strip() if i < len(feats) else "",
                 })
         pricing["plans"] = plans
+        
+        # Update currency pricing
+        currency_pricing = {}
+        for currency in SUPPORTED_CURRENCIES:
+            if currency == "NGN":
+                currency_pricing[currency] = {p["name"]: p["price"] for p in plans}
+            else:
+                # Convert prices
+                rate = SUPPORTED_CURRENCIES[currency]["exchange_rate"]
+                if currency == "TON":
+                    ton_rate = SUPPORTED_CURRENCIES["TON"]["exchange_rate"]
+                    currency_pricing[currency] = {p["name"]: round(float(p["price"]) / ton_rate, 2) for p in plans}
+                else:
+                    currency_pricing[currency] = {p["name"]: round(float(p["price"]) * rate, 2) for p in plans}
+        
+        pricing["currency_pricing"] = currency_pricing
         save_pricing(pricing)
-        flash("Pricing updated!", "success")
+        flash("Pricing updated with multi-currency support!", "success")
     except Exception as e:
         app.logger.error(f"Owner pricing error: {e}")
         flash(f"Error updating pricing: {str(e)}", "error")
@@ -2805,8 +2529,8 @@ def debug():
         "status": "running",
         "service": "NCK Dev VPS",
         "github_backup_enabled": github_backup.is_enabled if github_backup else False,
-        "flw_enabled": FLW_ENABLED,
-        "github_storage_enabled": github_storage.is_enabled
+        "telegram_enabled": TELEGRAM_ENABLED,
+        "currencies_supported": list(SUPPORTED_CURRENCIES.keys())
     })
 
 if __name__ == "__main__":
