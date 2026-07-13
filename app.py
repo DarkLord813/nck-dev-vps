@@ -469,195 +469,6 @@ class PortManager:
 
 port_manager = PortManager()
 
-# ==================== PROJECT DEPLOYMENT ENGINE ====================
-class ProjectDeploymentEngine:
-    @staticmethod
-    def detect_project_type(project_dir):
-        project_dir = Path(project_dir)
-        py_files = list(project_dir.glob("*.py"))
-        has_requirements = (project_dir / "requirements.txt").exists()
-        
-        has_flask = False
-        has_django = False
-        for f in py_files[:5]:
-            if f.is_file():
-                try:
-                    content = f.read_text().lower()
-                    if "flask" in content:
-                        has_flask = True
-                    if "django" in content:
-                        has_django = True
-                except:
-                    pass
-        
-        has_package_json = (project_dir / "package.json").exists()
-        has_server_js = (project_dir / "server.js").exists() or (project_dir / "index.js").exists()
-        has_php = any(project_dir.glob("*.php"))
-        has_index_html = (project_dir / "index.html").exists()
-        
-        if has_django:
-            return "django", "python manage.py runserver 0.0.0.0:$PORT"
-        elif has_flask:
-            for f in py_files:
-                try:
-                    content = f.read_text().lower()
-                    if "flask" in content and ("app.run" in content or "__name__" in content):
-                        return "flask", f"python {f.name}"
-                except:
-                    pass
-            return "flask", "python app.py"
-        elif has_requirements and py_files:
-            return "python", f"python {py_files[0].name}"
-        elif has_package_json and has_server_js:
-            return "nodejs", "npm start"
-        elif has_package_json:
-            try:
-                import json
-                with open(project_dir / "package.json") as f:
-                    pkg = json.load(f)
-                    if "scripts" in pkg and "start" in pkg["scripts"]:
-                        return "nodejs", "npm start"
-                    elif "scripts" in pkg and "dev" in pkg["scripts"]:
-                        return "nodejs", "npm run dev"
-            except:
-                pass
-            return "nodejs", "node server.js"
-        elif has_php:
-            return "php", "php -S 0.0.0.0:$PORT"
-        elif has_index_html:
-            return "static", "python -m http.server $PORT"
-        elif py_files:
-            return "python", f"python {py_files[0].name}"
-        else:
-            return "unknown", None
-    
-    @staticmethod
-    def install_dependencies(project_dir, project_type):
-        project_dir = Path(project_dir)
-        results = []
-        
-        if project_type in ["python", "flask", "django"]:
-            req_file = project_dir / "requirements.txt"
-            if req_file.exists():
-                try:
-                    print(f"📦 Installing Python dependencies from {req_file}")
-                    result = subprocess.run(
-                        ['pip', 'install', '-r', str(req_file)],
-                        cwd=str(project_dir),
-                        capture_output=True,
-                        text=True,
-                        timeout=300
-                    )
-                    if result.returncode == 0:
-                        results.append("✅ Python dependencies installed successfully")
-                    else:
-                        results.append(f"⚠️ Some Python packages failed: {result.stderr[:200]}")
-                except subprocess.TimeoutExpired:
-                    results.append("❌ Python dependency installation timed out")
-                except Exception as e:
-                    results.append(f"❌ Error installing Python dependencies: {str(e)}")
-            else:
-                results.append("ℹ️ No requirements.txt found")
-        
-        elif project_type == "nodejs":
-            pkg_file = project_dir / "package.json"
-            if pkg_file.exists():
-                try:
-                    print(f"📦 Installing Node.js dependencies from {pkg_file}")
-                    npm_check = subprocess.run(['npm', '--version'], capture_output=True, timeout=5)
-                    if npm_check.returncode == 0:
-                        result = subprocess.run(
-                            ['npm', 'install'],
-                            cwd=str(project_dir),
-                            capture_output=True,
-                            text=True,
-                            timeout=300
-                        )
-                        if result.returncode == 0:
-                            results.append("✅ Node.js dependencies installed successfully")
-                        else:
-                            results.append(f"⚠️ npm install failed: {result.stderr[:200]}")
-                    else:
-                        results.append("⚠️ npm not available")
-                except subprocess.TimeoutExpired:
-                    results.append("❌ Node.js dependency installation timed out")
-                except Exception as e:
-                    results.append(f"❌ Error installing Node.js dependencies: {str(e)}")
-            else:
-                results.append("ℹ️ No package.json found")
-        
-        return results
-    
-    @staticmethod
-    def detect_env_file(project_dir):
-        project_dir = Path(project_dir)
-        env_file = project_dir / ".env"
-        env_vars = {}
-        
-        if env_file.exists():
-            try:
-                with open(env_file, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith('#'):
-                            if line.startswith('export '):
-                                line = line[7:]
-                            parts = line.split('=', 1)
-                            if len(parts) == 2:
-                                key = parts[0].strip()
-                                value = parts[1].strip()
-                                if (value.startswith('"') and value.endswith('"')) or \
-                                   (value.startswith("'") and value.endswith("'")):
-                                    value = value[1:-1]
-                                env_vars[key] = value
-                if env_vars:
-                    print(f"🌿 Detected {len(env_vars)} environment variables from .env")
-            except Exception as e:
-                print(f"⚠️ Error reading .env file: {e}")
-        
-        return env_vars
-    
-    @staticmethod
-    def analyze_project(project_dir):
-        project_dir = Path(project_dir)
-        analysis = {
-            "project_type": None,
-            "run_command": None,
-            "has_requirements": False,
-            "has_env": False,
-            "env_vars": {},
-            "dependencies_installed": False,
-            "main_files": [],
-            "framework": "unknown"
-        }
-        
-        project_type, run_command = ProjectDeploymentEngine.detect_project_type(project_dir)
-        analysis["project_type"] = project_type
-        analysis["run_command"] = run_command
-        analysis["has_requirements"] = (project_dir / "requirements.txt").exists()
-        
-        env_vars = ProjectDeploymentEngine.detect_env_file(project_dir)
-        if env_vars:
-            analysis["has_env"] = True
-            analysis["env_vars"] = env_vars
-        
-        analysis["main_files"] = [f.name for f in project_dir.iterdir() if f.is_file()]
-        
-        if project_type == "flask":
-            analysis["framework"] = "Flask"
-        elif project_type == "django":
-            analysis["framework"] = "Django"
-        elif project_type == "nodejs":
-            analysis["framework"] = "Node.js"
-        elif project_type == "php":
-            analysis["framework"] = "PHP"
-        elif project_type == "static":
-            analysis["framework"] = "Static Site"
-        
-        return analysis
-
-deployment_engine = ProjectDeploymentEngine()
-
 # ==================== STORAGE ====================
 _lock = threading.Lock()
 
@@ -868,46 +679,6 @@ def delete_project(username, project_id):
         return True
     return False
 
-def deploy_project_files(username, project_id):
-    project = get_project(username, project_id)
-    if not project:
-        return False, "Project not found"
-    
-    project_dir = FILES_ROOT / username / project_id
-    
-    # Ensure directory exists before deploying
-    if not project_dir.exists():
-        project_dir.mkdir(parents=True, exist_ok=True)
-    
-    analysis = deployment_engine.analyze_project(project_dir)
-    
-    projects = load_projects()
-    if username in projects and project_id in projects[username]:
-        projects[username][project_id]["project_type"] = analysis["project_type"]
-        projects[username][project_id]["framework"] = analysis["framework"]
-        projects[username][project_id]["files"] = analysis["main_files"]
-        
-        if analysis["run_command"] and not projects[username][project_id]["run_command"]:
-            projects[username][project_id]["run_command"] = analysis["run_command"]
-        
-        if analysis["env_vars"]:
-            projects[username][project_id]["env_vars"] = analysis["env_vars"]
-        
-        save_projects(projects)
-    
-    install_results = deployment_engine.install_dependencies(project_dir, analysis["project_type"])
-    
-    projects = load_projects()
-    if username in projects and project_id in projects[username]:
-        projects[username][project_id]["deployment_status"] = "deployed"
-        projects[username][project_id]["dependencies_installed"] = True
-        projects[username][project_id]["deployment_log"] = install_results
-        save_projects(projects)
-    
-    threading.Thread(target=lambda: manual_backup(f"Project deployed: {project['name']} by {username}"), daemon=True).start()
-    
-    return True, install_results
-
 # ==================== PROJECT PROCESS MANAGEMENT ====================
 PROJECT_PROCS = {}
 
@@ -920,16 +691,23 @@ def start_project_process(username, project_id):
     project_dir = FILES_ROOT / username / project_id
     run_command = project.get("run_command", "")
     
+    # If no run command, try to auto-detect
     if not run_command:
+        from . import deployment_engine
         analysis = deployment_engine.analyze_project(project_dir)
-        if analysis["run_command"]:
+        if analysis.get("run_command"):
             run_command = analysis["run_command"]
             projects = load_projects()
             if username in projects and project_id in projects[username]:
                 projects[username][project_id]["run_command"] = run_command
                 save_projects(projects)
         else:
-            return False, "No run command set and couldn't auto-detect"
+            # Try to find a Python file to run
+            py_files = list(project_dir.glob("*.py"))
+            if py_files:
+                run_command = f"python {py_files[0].name}"
+            else:
+                return False, "No run command set and couldn't auto-detect"
     
     try:
         env = os.environ.copy()
@@ -938,8 +716,6 @@ def start_project_process(username, project_id):
         
         if project.get("port"):
             env["PORT"] = str(project["port"])
-        
-        if project.get("port"):
             run_command = run_command.replace("$PORT", str(project["port"]))
         
         print(f"🚀 Starting project {project_id} with command: {run_command}")
@@ -1068,6 +844,235 @@ def get_project_resources(username, project_id):
         }
     except:
         return {"cpu": 0, "ram": 0, "ram_mb": 0}
+
+# ==================== PROJECT DEPLOYMENT ENGINE ====================
+class ProjectDeploymentEngine:
+    @staticmethod
+    def detect_project_type(project_dir):
+        project_dir = Path(project_dir)
+        py_files = list(project_dir.glob("*.py"))
+        has_requirements = (project_dir / "requirements.txt").exists()
+        
+        has_flask = False
+        has_django = False
+        for f in py_files[:5]:
+            if f.is_file():
+                try:
+                    content = f.read_text().lower()
+                    if "flask" in content:
+                        has_flask = True
+                    if "django" in content:
+                        has_django = True
+                except:
+                    pass
+        
+        has_package_json = (project_dir / "package.json").exists()
+        has_server_js = (project_dir / "server.js").exists() or (project_dir / "index.js").exists()
+        has_php = any(project_dir.glob("*.php"))
+        has_index_html = (project_dir / "index.html").exists()
+        
+        if has_django:
+            return "django", "python manage.py runserver 0.0.0.0:$PORT"
+        elif has_flask:
+            for f in py_files:
+                try:
+                    content = f.read_text().lower()
+                    if "flask" in content and ("app.run" in content or "__name__" in content):
+                        return "flask", f"python {f.name}"
+                except:
+                    pass
+            return "flask", "python app.py"
+        elif has_requirements and py_files:
+            return "python", f"python {py_files[0].name}"
+        elif has_package_json and has_server_js:
+            return "nodejs", "npm start"
+        elif has_package_json:
+            try:
+                import json
+                with open(project_dir / "package.json") as f:
+                    pkg = json.load(f)
+                    if "scripts" in pkg and "start" in pkg["scripts"]:
+                        return "nodejs", "npm start"
+                    elif "scripts" in pkg and "dev" in pkg["scripts"]:
+                        return "nodejs", "npm run dev"
+            except:
+                pass
+            return "nodejs", "node server.js"
+        elif has_php:
+            return "php", "php -S 0.0.0.0:$PORT"
+        elif has_index_html:
+            return "static", "python -m http.server $PORT"
+        elif py_files:
+            return "python", f"python {py_files[0].name}"
+        else:
+            return "unknown", None
+    
+    @staticmethod
+    def install_dependencies(project_dir, project_type):
+        project_dir = Path(project_dir)
+        results = []
+        
+        if project_type in ["python", "flask", "django"]:
+            req_file = project_dir / "requirements.txt"
+            if req_file.exists():
+                try:
+                    print(f"📦 Installing Python dependencies from {req_file}")
+                    result = subprocess.run(
+                        ['pip', 'install', '-r', str(req_file)],
+                        cwd=str(project_dir),
+                        capture_output=True,
+                        text=True,
+                        timeout=300
+                    )
+                    if result.returncode == 0:
+                        results.append("✅ Python dependencies installed successfully")
+                    else:
+                        results.append(f"⚠️ Some Python packages failed: {result.stderr[:200]}")
+                except subprocess.TimeoutExpired:
+                    results.append("❌ Python dependency installation timed out")
+                except Exception as e:
+                    results.append(f"❌ Error installing Python dependencies: {str(e)}")
+            else:
+                results.append("ℹ️ No requirements.txt found")
+        
+        elif project_type == "nodejs":
+            pkg_file = project_dir / "package.json"
+            if pkg_file.exists():
+                try:
+                    print(f"📦 Installing Node.js dependencies from {pkg_file}")
+                    npm_check = subprocess.run(['npm', '--version'], capture_output=True, timeout=5)
+                    if npm_check.returncode == 0:
+                        result = subprocess.run(
+                            ['npm', 'install'],
+                            cwd=str(project_dir),
+                            capture_output=True,
+                            text=True,
+                            timeout=300
+                        )
+                        if result.returncode == 0:
+                            results.append("✅ Node.js dependencies installed successfully")
+                        else:
+                            results.append(f"⚠️ npm install failed: {result.stderr[:200]}")
+                    else:
+                        results.append("⚠️ npm not available")
+                except subprocess.TimeoutExpired:
+                    results.append("❌ Node.js dependency installation timed out")
+                except Exception as e:
+                    results.append(f"❌ Error installing Node.js dependencies: {str(e)}")
+            else:
+                results.append("ℹ️ No package.json found")
+        
+        return results
+    
+    @staticmethod
+    def detect_env_file(project_dir):
+        project_dir = Path(project_dir)
+        env_file = project_dir / ".env"
+        env_vars = {}
+        
+        if env_file.exists():
+            try:
+                with open(env_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            if line.startswith('export '):
+                                line = line[7:]
+                            parts = line.split('=', 1)
+                            if len(parts) == 2:
+                                key = parts[0].strip()
+                                value = parts[1].strip()
+                                if (value.startswith('"') and value.endswith('"')) or \
+                                   (value.startswith("'") and value.endswith("'")):
+                                    value = value[1:-1]
+                                env_vars[key] = value
+                if env_vars:
+                    print(f"🌿 Detected {len(env_vars)} environment variables from .env")
+            except Exception as e:
+                print(f"⚠️ Error reading .env file: {e}")
+        
+        return env_vars
+    
+    @staticmethod
+    def analyze_project(project_dir):
+        project_dir = Path(project_dir)
+        analysis = {
+            "project_type": None,
+            "run_command": None,
+            "has_requirements": False,
+            "has_env": False,
+            "env_vars": {},
+            "dependencies_installed": False,
+            "main_files": [],
+            "framework": "unknown"
+        }
+        
+        project_type, run_command = ProjectDeploymentEngine.detect_project_type(project_dir)
+        analysis["project_type"] = project_type
+        analysis["run_command"] = run_command
+        analysis["has_requirements"] = (project_dir / "requirements.txt").exists()
+        
+        env_vars = ProjectDeploymentEngine.detect_env_file(project_dir)
+        if env_vars:
+            analysis["has_env"] = True
+            analysis["env_vars"] = env_vars
+        
+        analysis["main_files"] = [f.name for f in project_dir.iterdir() if f.is_file()]
+        
+        if project_type == "flask":
+            analysis["framework"] = "Flask"
+        elif project_type == "django":
+            analysis["framework"] = "Django"
+        elif project_type == "nodejs":
+            analysis["framework"] = "Node.js"
+        elif project_type == "php":
+            analysis["framework"] = "PHP"
+        elif project_type == "static":
+            analysis["framework"] = "Static Site"
+        
+        return analysis
+
+deployment_engine = ProjectDeploymentEngine()
+
+def deploy_project_files(username, project_id):
+    project = get_project(username, project_id)
+    if not project:
+        return False, "Project not found"
+    
+    project_dir = FILES_ROOT / username / project_id
+    
+    # Ensure directory exists before deploying
+    if not project_dir.exists():
+        project_dir.mkdir(parents=True, exist_ok=True)
+    
+    analysis = deployment_engine.analyze_project(project_dir)
+    
+    projects = load_projects()
+    if username in projects and project_id in projects[username]:
+        projects[username][project_id]["project_type"] = analysis["project_type"]
+        projects[username][project_id]["framework"] = analysis["framework"]
+        projects[username][project_id]["files"] = analysis["main_files"]
+        
+        if analysis["run_command"] and not projects[username][project_id]["run_command"]:
+            projects[username][project_id]["run_command"] = analysis["run_command"]
+        
+        if analysis["env_vars"]:
+            projects[username][project_id]["env_vars"] = analysis["env_vars"]
+        
+        save_projects(projects)
+    
+    install_results = deployment_engine.install_dependencies(project_dir, analysis["project_type"])
+    
+    projects = load_projects()
+    if username in projects and project_id in projects[username]:
+        projects[username][project_id]["deployment_status"] = "deployed"
+        projects[username][project_id]["dependencies_installed"] = True
+        projects[username][project_id]["deployment_log"] = install_results
+        save_projects(projects)
+    
+    threading.Thread(target=lambda: manual_backup(f"Project deployed: {project['name']} by {username}"), daemon=True).start()
+    
+    return True, install_results
 
 # ==================== ROUTES ====================
 
@@ -1474,28 +1479,38 @@ def deploy_project():
             return jsonify({"success": False, "error": "No project found!"}), 400
         
         project_id = list(projects.keys())[0]
+        project = get_project(u, project_id)
+        
+        if not project:
+            return jsonify({"success": False, "error": "Project not found!"}), 404
+        
+        # Check if there are files to deploy
+        project_dir = FILES_ROOT / u / project_id
+        if not project_dir.exists() or not any(project_dir.iterdir()):
+            return jsonify({"success": False, "error": "No files found to deploy! Please upload files first."}), 400
+        
         success, results = deploy_project_files(u, project_id)
         
         if success:
-            project = get_project(u, project_id)
-            if project and project.get("run_command"):
+            # Try to start the project
+            if project.get("run_command"):
                 start_success, start_msg = start_project_process(u, project_id)
                 if start_success:
                     return jsonify({
                         "success": True,
-                        "message": f"Project deployed and started! {start_msg}",
+                        "message": f"✅ Project deployed and started! {start_msg}",
                         "deployment_log": results
                     })
                 else:
                     return jsonify({
                         "success": True,
-                        "message": f"Project deployed but failed to start: {start_msg}",
+                        "message": f"⚠️ Project deployed but failed to start: {start_msg}",
                         "deployment_log": results
                     })
             else:
                 return jsonify({
                     "success": True,
-                    "message": "Project deployed successfully. Set a run command to start it.",
+                    "message": "✅ Project deployed successfully. Set a run command to start it.",
                     "deployment_log": results
                 })
         else:
@@ -1966,6 +1981,11 @@ def project_start(project_id):
         if is_project_running(u, project_id):
             return jsonify({"success": False, "error": "Project is already running"}), 400
         
+        # Check if there are files to run
+        project_dir = FILES_ROOT / u / project_id
+        if not project_dir.exists() or not any(project_dir.iterdir()):
+            return jsonify({"success": False, "error": "No files found! Please upload files first."}), 400
+        
         success, msg = start_project_process(u, project_id)
         if success:
             threading.Thread(target=lambda: manual_backup(f"Project started: {project['name']}"), daemon=True).start()
@@ -2106,18 +2126,20 @@ def project_delete(project_id):
         u = current_user()
         project = get_project(u, project_id)
         if not project:
-            flash("Project not found!", "error")
-            return redirect(url_for("projects_list"))
+            return jsonify({"success": False, "error": "Project not found"}), 404
         
+        # Stop the project if running
+        stop_project_process(u, project_id)
+        
+        # Delete the project
         if delete_project(u, project_id):
-            flash(f"Project '{project['name']}' deleted!", "success")
+            threading.Thread(target=lambda: manual_backup(f"Project deleted: {project['name']} by {u}"), daemon=True).start()
+            return jsonify({"success": True, "message": f"Project '{project['name']}' deleted!"})
         else:
-            flash("Failed to delete project!", "error")
+            return jsonify({"success": False, "error": "Failed to delete project"}), 500
     except Exception as e:
         app.logger.error(f"Project delete error: {e}")
-        flash(f"Error deleting project: {str(e)}", "error")
-    
-    return redirect(url_for("projects_list"))
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/project/<project_id>/deploy", methods=["POST"])
 @require_user
