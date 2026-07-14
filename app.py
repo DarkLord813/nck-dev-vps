@@ -1107,6 +1107,97 @@ def deploy_project_files(username, project_id):
     
     return True, install_results
 
+# ==================== UPLOAD TASK MANAGER ====================
+upload_tasks = {}
+
+def process_upload_task(task_id, u, project_id, project_dir):
+    """Background task to process uploaded files"""
+    try:
+        upload_tasks[task_id] = {"status": "processing", "message": "Processing files...", "progress": 10}
+        
+        # Scan for requirements.txt
+        req_files = list(project_dir.rglob('requirements.txt'))
+        if req_files:
+            upload_tasks[task_id] = {"status": "processing", "message": "Installing requirements...", "progress": 30}
+            req_file = req_files[0]
+            try:
+                result = subprocess.run(
+                    ['pip', 'install', '-r', str(req_file)],
+                    cwd=str(project_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                if result.returncode == 0:
+                    upload_tasks[task_id] = {"status": "processing", "message": "✅ Requirements installed!", "progress": 50}
+                else:
+                    upload_tasks[task_id] = {"status": "processing", "message": f"⚠️ Some packages failed: {result.stderr[:100]}", "progress": 40}
+            except Exception as e:
+                upload_tasks[task_id] = {"status": "processing", "message": f"❌ Error: {str(e)}", "progress": 40}
+        
+        # Scan for .env files
+        env_files = list(project_dir.rglob('.env')) + list(project_dir.rglob('env.txt')) + list(project_dir.rglob('text.env'))
+        if env_files:
+            upload_tasks[task_id] = {"status": "processing", "message": "Loading environment variables...", "progress": 60}
+            env_file = env_files[0]
+            try:
+                env_vars = {}
+                with open(env_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            if line.startswith('export '):
+                                line = line[7:]
+                            parts = line.split('=', 1)
+                            if len(parts) == 2:
+                                key = parts[0].strip()
+                                value = parts[1].strip()
+                                if (value.startswith('"') and value.endswith('"')) or \
+                                   (value.startswith("'") and value.endswith("'")):
+                                    value = value[1:-1]
+                                env_vars[key] = value
+                
+                if env_vars:
+                    projects = load_projects()
+                    if u in projects and project_id in projects[u]:
+                        projects[u][project_id]["env_vars"] = env_vars
+                        save_projects(projects)
+                        upload_tasks[task_id] = {"status": "processing", "message": f"✅ Loaded {len(env_vars)} env vars!", "progress": 70}
+            except Exception as e:
+                upload_tasks[task_id] = {"status": "processing", "message": f"⚠️ Error loading .env: {str(e)}", "progress": 60}
+        
+        # Scan for package.json
+        pkg_files = list(project_dir.rglob('package.json'))
+        if pkg_files:
+            upload_tasks[task_id] = {"status": "processing", "message": "Installing npm dependencies...", "progress": 75}
+            try:
+                npm_check = subprocess.run(['npm', '--version'], capture_output=True, timeout=5)
+                if npm_check.returncode == 0:
+                    result = subprocess.run(
+                        ['npm', 'install'],
+                        cwd=str(project_dir),
+                        capture_output=True,
+                        text=True,
+                        timeout=300
+                    )
+                    if result.returncode == 0:
+                        upload_tasks[task_id] = {"status": "processing", "message": "✅ npm dependencies installed!", "progress": 85}
+                    else:
+                        upload_tasks[task_id] = {"status": "processing", "message": f"⚠️ npm install failed", "progress": 80}
+            except Exception as e:
+                upload_tasks[task_id] = {"status": "processing", "message": f"⚠️ npm error: {str(e)}", "progress": 80}
+        
+        # Deploy project
+        upload_tasks[task_id] = {"status": "processing", "message": "Deploying project...", "progress": 90}
+        success, results = deploy_project_files(u, project_id)
+        if success:
+            upload_tasks[task_id] = {"status": "complete", "message": "✅ Project uploaded and deployed successfully!", "progress": 100}
+        else:
+            upload_tasks[task_id] = {"status": "complete", "message": f"⚠️ Uploaded but deployment failed: {results}", "progress": 95}
+            
+    except Exception as e:
+        upload_tasks[task_id] = {"status": "error", "message": f"❌ Error: {str(e)}", "progress": 0}
+
 # ==================== ROUTES ====================
 
 @app.route("/")
@@ -1359,7 +1450,7 @@ def user_dashboard():
             is_paid=False
         )
 
-# ==================== UPLOAD ROUTES (WITH AUTO-DETECT) ====================
+# ==================== UPLOAD ROUTES (WITH ASYNC PROCESSING) ====================
 
 @app.route("/upload", methods=["POST"])
 @require_user
@@ -1391,9 +1482,11 @@ def upload():
         files = request.files.getlist("files")
         uploaded_count = 0
         extracted_count = 0
-        has_requirements = False
-        has_env = False
-        has_package_json = False
+        
+        # Track what was found
+        found_requirements = False
+        found_env = False
+        found_package_json = False
         
         for f in files:
             if f and f.filename:
@@ -1402,18 +1495,9 @@ def upload():
                     file_path = project_dir / name
                     f.save(file_path)
                     
-                    # Check for important files BEFORE extraction
-                    if name == 'requirements.txt':
-                        has_requirements = True
-                    elif name == '.env' or name == 'env.txt':
-                        has_env = True
-                    elif name == 'package.json':
-                        has_package_json = True
-                    
                     # Handle archives
                     if name.endswith('.zip') or name.endswith('.tar.gz') or name.endswith('.tgz') or name.endswith('.tar'):
                         try:
-                            # Extract the archive
                             if name.endswith('.zip'):
                                 with zipfile.ZipFile(file_path, 'r') as zip_ref:
                                     zip_ref.extractall(project_dir)
@@ -1426,133 +1510,62 @@ def upload():
                                         tar_ref.extractall(project_dir)
                             os.remove(file_path)
                             extracted_count += 1
-                            
-                            # After extraction, check for important files
-                            # Check for requirements.txt
-                            req_file = project_dir / 'requirements.txt'
-                            if req_file.exists():
-                                has_requirements = True
-                                flash(f"📦 Found requirements.txt in archive!", "info")
-                            
-                            # Check for .env file
-                            env_file = project_dir / '.env'
-                            if env_file.exists():
-                                has_env = True
-                                flash(f"🔑 Found .env file in archive!", "info")
-                            
-                            # Check for package.json
-                            pkg_file = project_dir / 'package.json'
-                            if pkg_file.exists():
-                                has_package_json = True
-                                flash(f"📦 Found package.json in archive!", "info")
-                            
-                            # Check for any Python files
-                            py_files = list(project_dir.glob("*.py"))
-                            if py_files:
-                                flash(f"🐍 Found {len(py_files)} Python files in archive!", "info")
-                            
                         except Exception as e:
                             flash(f"❌ Failed to extract {name}: {str(e)}", "error")
                     else:
                         uploaded_count += 1
         
-        # ==================== AUTO-INSTALL REQUIREMENTS ====================
-        if has_requirements:
-            req_file = project_dir / 'requirements.txt'
-            if req_file.exists():
-                flash(f"📦 Installing requirements from requirements.txt...", "info")
-                try:
-                    result = subprocess.run(
-                        ['pip', 'install', '-r', str(req_file)],
-                        cwd=str(project_dir),
-                        capture_output=True,
-                        text=True,
-                        timeout=300
-                    )
-                    if result.returncode == 0:
-                        flash(f"✅ Requirements installed successfully!", "success")
-                    else:
-                        flash(f"⚠️ Some packages failed to install: {result.stderr[:200]}", "warning")
-                except subprocess.TimeoutExpired:
-                    flash("❌ Installation timed out.", "error")
-                except Exception as e:
-                    flash(f"❌ Error installing requirements: {str(e)}", "error")
+        # Generate task ID for background processing
+        task_id = secrets.token_hex(16)
         
-        # ==================== AUTO-LOAD ENVIRONMENT VARIABLES ====================
-        if has_env:
-            env_file = project_dir / '.env'
-            if env_file.exists():
-                try:
-                    env_vars = {}
-                    with open(env_file, 'r') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line and not line.startswith('#'):
-                                if line.startswith('export '):
-                                    line = line[7:]
-                                parts = line.split('=', 1)
-                                if len(parts) == 2:
-                                    key = parts[0].strip()
-                                    value = parts[1].strip()
-                                    if (value.startswith('"') and value.endswith('"')) or \
-                                       (value.startswith("'") and value.endswith("'")):
-                                        value = value[1:-1]
-                                    env_vars[key] = value
-                    
-                    if env_vars:
-                        # Save to project
-                        projects = load_projects()
-                        if u in projects and project_id in projects[u]:
-                            projects[u][project_id]["env_vars"] = env_vars
-                            save_projects(projects)
-                            flash(f"🔑 Loaded {len(env_vars)} environment variables from .env!", "success")
-                except Exception as e:
-                    flash(f"⚠️ Error loading .env: {str(e)}", "warning")
+        # Start background task
+        threading.Thread(
+            target=process_upload_task,
+            args=(task_id, u, project_id, project_dir),
+            daemon=True
+        ).start()
         
-        # ==================== AUTO-INSTALL NPM DEPENDENCIES ====================
-        if has_package_json:
-            pkg_file = project_dir / 'package.json'
-            if pkg_file.exists():
-                flash(f"📦 Installing Node.js dependencies from package.json...", "info")
-                try:
-                    npm_check = subprocess.run(['npm', '--version'], capture_output=True, timeout=5)
-                    if npm_check.returncode == 0:
-                        result = subprocess.run(
-                            ['npm', 'install'],
-                            cwd=str(project_dir),
-                            capture_output=True,
-                            text=True,
-                            timeout=300
-                        )
-                        if result.returncode == 0:
-                            flash(f"✅ Node.js dependencies installed successfully!", "success")
-                        else:
-                            flash(f"⚠️ npm install failed: {result.stderr[:200]}", "warning")
-                    else:
-                        flash("⚠️ npm not available", "warning")
-                except subprocess.TimeoutExpired:
-                    flash("❌ npm install timed out.", "error")
-                except Exception as e:
-                    flash(f"❌ Error installing npm dependencies: {str(e)}", "error")
-        
-        # ==================== DEPLOY PROJECT ====================
-        if uploaded_count > 0 or extracted_count > 0:
-            success, results = deploy_project_files(u, project_id)
-            if success:
-                flash(f"✅ {uploaded_count} files uploaded, {extracted_count} archives extracted, project deployed!", "success")
-            else:
-                flash(f"⚠️ Files uploaded but deployment failed: {results}", "warning")
-        else:
-            flash("⚠️ No files were uploaded.", "warning")
-        
+        # Update file list
         update_project_files(u, project_id)
-        threading.Thread(target=lambda: manual_backup(f"Files uploaded to project {project_id} by {u}"), daemon=True).start()
+        manual_backup(f"Files uploaded to project {project_id} by {u}")
+        
+        flash(f"📤 {uploaded_count} files uploaded, {extracted_count} archives extracted! Processing in background...", "info")
+        
+        # Store task ID in session for status checking
+        session['upload_task_id'] = task_id
+        session['upload_project_id'] = project_id
         
     except Exception as e:
         app.logger.error(f"Upload error: {e}")
         flash(f"Error uploading files: {str(e)}", "error")
     
-    return redirect(url_for("user_dashboard"))
+    return redirect(url_for("upload_status"))
+
+@app.route("/upload-status")
+@require_user
+def upload_status():
+    """Check the status of the upload processing"""
+    task_id = session.get('upload_task_id')
+    project_id = session.get('upload_project_id')
+    
+    if not task_id or task_id not in upload_tasks:
+        return render_template("upload_status.html", task=None, complete=False, project_id=project_id)
+    
+    task = upload_tasks.get(task_id)
+    complete = task.get("status") in ["complete", "error"] if task else False
+    
+    return render_template("upload_status.html", task=task, complete=complete, project_id=project_id)
+
+@app.route("/upload-status-json")
+@require_user
+def upload_status_json():
+    """Get upload status as JSON for AJAX polling"""
+    task_id = session.get('upload_task_id')
+    if not task_id or task_id not in upload_tasks:
+        return jsonify({"status": "not_found", "message": "No upload in progress", "progress": 0})
+    
+    task = upload_tasks.get(task_id)
+    return jsonify(task)
 
 @app.route("/upload-requirements", methods=["POST"])
 @require_user
@@ -1994,9 +2007,6 @@ def project_upload(project_id):
         files = request.files.getlist("files")
         uploaded_count = 0
         extracted_count = 0
-        has_requirements = False
-        has_env = False
-        has_package_json = False
         
         for file in files:
             if not file or not file.filename:
@@ -2007,14 +2017,6 @@ def project_upload(project_id):
             
             file_path = project_dir / name
             file.save(file_path)
-            
-            # Check for important files
-            if name == 'requirements.txt':
-                has_requirements = True
-            elif name == '.env' or name == 'env.txt':
-                has_env = True
-            elif name == 'package.json':
-                has_package_json = True
             
             # Handle archives
             if name.endswith('.zip') or name.endswith('.tar.gz') or name.endswith('.tgz') or name.endswith('.tar'):
@@ -2032,104 +2034,34 @@ def project_upload(project_id):
                     os.remove(file_path)
                     extracted_count += 1
                     flash(f"📦 Extracted {name}!", "success")
-                    
-                    # Check extracted files
-                    if (project_dir / 'requirements.txt').exists():
-                        has_requirements = True
-                    if (project_dir / '.env').exists():
-                        has_env = True
-                    if (project_dir / 'package.json').exists():
-                        has_package_json = True
-                        
                 except Exception as e:
                     flash(f"❌ Failed to extract {name}: {str(e)}", "error")
             else:
                 uploaded_count += 1
                 flash(f"📄 Uploaded {name}", "success")
         
-        # Auto-install requirements
-        if has_requirements:
-            req_file = project_dir / 'requirements.txt'
-            if req_file.exists():
-                flash(f"📦 Installing requirements from requirements.txt...", "info")
-                try:
-                    result = subprocess.run(
-                        ['pip', 'install', '-r', str(req_file)],
-                        cwd=str(project_dir),
-                        capture_output=True,
-                        text=True,
-                        timeout=300
-                    )
-                    if result.returncode == 0:
-                        flash(f"✅ Requirements installed successfully!", "success")
-                    else:
-                        flash(f"⚠️ Some packages failed to install: {result.stderr[:200]}", "warning")
-                except Exception as e:
-                    flash(f"❌ Error installing requirements: {str(e)}", "error")
+        # Generate task ID for background processing
+        task_id = secrets.token_hex(16)
         
-        # Auto-load .env
-        if has_env:
-            env_file = project_dir / '.env'
-            if env_file.exists():
-                try:
-                    env_vars = {}
-                    with open(env_file, 'r') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line and not line.startswith('#'):
-                                if line.startswith('export '):
-                                    line = line[7:]
-                                parts = line.split('=', 1)
-                                if len(parts) == 2:
-                                    key = parts[0].strip()
-                                    value = parts[1].strip()
-                                    if (value.startswith('"') and value.endswith('"')) or \
-                                       (value.startswith("'") and value.endswith("'")):
-                                        value = value[1:-1]
-                                    env_vars[key] = value
-                    
-                    if env_vars:
-                        projects = load_projects()
-                        if u in projects and project_id in projects[u]:
-                            projects[u][project_id]["env_vars"] = env_vars
-                            save_projects(projects)
-                            flash(f"🔑 Loaded {len(env_vars)} environment variables from .env!", "success")
-                except Exception as e:
-                    flash(f"⚠️ Error loading .env: {str(e)}", "warning")
-        
-        # Auto-install npm dependencies
-        if has_package_json:
-            pkg_file = project_dir / 'package.json'
-            if pkg_file.exists():
-                flash(f"📦 Installing Node.js dependencies...", "info")
-                try:
-                    npm_check = subprocess.run(['npm', '--version'], capture_output=True, timeout=5)
-                    if npm_check.returncode == 0:
-                        result = subprocess.run(
-                            ['npm', 'install'],
-                            cwd=str(project_dir),
-                            capture_output=True,
-                            text=True,
-                            timeout=300
-                        )
-                        if result.returncode == 0:
-                            flash(f"✅ npm dependencies installed!", "success")
-                        else:
-                            flash(f"⚠️ npm install failed: {result.stderr[:200]}", "warning")
-                except Exception as e:
-                    flash(f"❌ Error: {str(e)}", "error")
-        
-        if uploaded_count > 0 or extracted_count > 0:
-            success, results = deploy_project_files(u, project_id)
-            if success:
-                flash(f"🚀 Project deployed!", "success")
+        # Start background task
+        threading.Thread(
+            target=process_upload_task,
+            args=(task_id, u, project_id, project_dir),
+            daemon=True
+        ).start()
         
         update_project_files(u, project_id)
+        
+        flash(f"📤 {uploaded_count} files uploaded, {extracted_count} archives extracted! Processing in background...", "info")
+        
+        session['upload_task_id'] = task_id
+        session['upload_project_id'] = project_id
+        
     except Exception as e:
         app.logger.error(f"Project upload error: {e}")
         flash(f"Error uploading files: {str(e)}", "error")
     
-    return redirect(url_for("project_detail", project_id=project_id))
+    return redirect(url_for("upload_status"))
 
 @app.route("/project/<project_id>/file/delete/<filename>", methods=["POST"])
 @require_user
